@@ -1,0 +1,28 @@
+version: "3.9"
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./env/backend.local.env
+    volumes:
+      - ../appdata:/app/appdata
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [localnet]
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    env_file:
+      - ./env/frontend.local.env
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    networks: [localnet]
+    depends_on: [backend]
+networks:
+  localnet: {}

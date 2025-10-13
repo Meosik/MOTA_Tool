@@ -1,0 +1,1 @@
+# Placeholder for per-run cached structures to speed up realtime preview.
