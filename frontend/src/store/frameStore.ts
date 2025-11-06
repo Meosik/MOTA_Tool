@@ -3,6 +3,7 @@ import type { MotRecord } from '../utils/parseMot'
 import { parseMot } from '../utils/parseMot'
 
 export type FrameMeta = { i:number, url:string, w:number, h:number }
+type ImgCache = Map<number, HTMLImageElement>;
 
 type St = {
   frames: FrameMeta[]
@@ -18,6 +19,10 @@ type St = {
   openPred: () => Promise<void>
   toggleGT: ()=>void
   togglePred: ()=>void
+  prefetchRadius: number;
+  imgCache: ImgCache;
+  setPrefetchRadius: (k: number) => void;
+  prefetchAround: (center: number) => void;
 }
 
 export const useFrameStore = create<St>((set,get)=>({
@@ -87,4 +92,36 @@ export const useFrameStore = create<St>((set,get)=>({
 
   toggleGT(){ set({ showGT: !get().showGT }) },
   togglePred(){ set({ showPred: !get().showPred }) },
+  prefetchRadius: 3,
+  imgCache: new Map(),
+
+  setPrefetchRadius(k){ set({ prefetchRadius: Math.max(0, Math.floor(k)) }); },
+
+  prefetchAround(center){
+    const { frames, prefetchRadius, imgCache } = get();
+    if (!frames.length) return;
+    const lo = Math.max(0, center - prefetchRadius);
+    const hi = Math.min(frames.length - 1, center + prefetchRadius);
+
+    for (let i = lo; i <= hi; i++){
+      const meta = frames[i];
+      if (!meta) continue;
+      if (imgCache.has(i)) continue;
+      const im = new Image();
+      im.src = meta.url;
+      // 로드 완료되면 cache 에 저장
+      im.onload = () => {
+        // 이미 누군가 넣었으면 무시
+        if (!get().imgCache.has(i)) {
+          const newMap = new Map(get().imgCache);
+          newMap.set(i, im);
+          set({ imgCache: newMap });
+        }
+      };
+      // 바로 넣어도 됨(지연 로드)
+      const newMap = new Map(imgCache);
+      newMap.set(i, im);
+      set({ imgCache: newMap });
+    }
+  },
 }))

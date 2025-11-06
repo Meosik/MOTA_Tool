@@ -8,7 +8,7 @@ export default function OverlayCanvas(){
   const cvsRef = useRef<HTMLCanvasElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
 
-  const { frames, cur, gt, pred, showGT, showPred } = useFrameStore()
+  const { frames, cur, gt, pred, showGT, showPred, imgCache } = useFrameStore()
   const meta = frames[cur]
 
   // 현재 프레임 번호 (= 파일명에서 뽑은 숫자)
@@ -22,9 +22,18 @@ export default function OverlayCanvas(){
   useEffect(()=>{
     const img = imgRef.current
     if(!img || !meta) return
-    img.onload = () => draw()
-    img.src = meta.url
-  }, [meta?.url])
+
+    const cached = imgCache.get(cur)
+    if (cached && cached.complete) {
+      // 캐시에 로드된 이미지가 있으면 즉시 그리기
+      drawWithImage(cached)
+    } else {
+      // 없으면 평소대로 로드 후 그리기
+      img.onload = () => draw()
+      img.src = meta.url
+    }
+  }, [meta?.url, cur, imgCache])
+
 
   // 데이터/토글 변경 시 재그리기
   useEffect(()=>{ draw() }, [gtBoxes, prBoxes, showGT, showPred])
@@ -39,10 +48,13 @@ export default function OverlayCanvas(){
   }, [])
 
   function draw(){
-    const canvas = cvsRef.current, img = imgRef.current
-    if(!canvas || !img) return
-    if(!meta) return
+    const img = imgRef.current
+    if (img) drawWithImage(img)
+  }
 
+  function drawWithImage(img: HTMLImageElement){
+    const canvas = cvsRef.current
+    if(!canvas) return
     const ctx = canvas.getContext('2d')!
     const parent = canvas.parentElement!
     const cssW = parent.clientWidth
@@ -56,7 +68,7 @@ export default function OverlayCanvas(){
     canvas.height = Math.round(cssH * dpr)
     ctx.setTransform(dpr,0,0,dpr,0,0)
 
-    // 이미지 contain 배치
+    // contain 배치
     const iw = img.naturalWidth || 1
     const ih = img.naturalHeight || 1
     const scale = Math.min(cssW/iw, cssH/ih)
@@ -65,7 +77,6 @@ export default function OverlayCanvas(){
     const ox = (cssW - rw) / 2
     const oy = (cssH - rh) / 2
 
-    // 배경(이미지)
     ctx.clearRect(0,0,cssW,cssH)
     if (img.complete) ctx.drawImage(img, ox, oy, rw, rh)
 
