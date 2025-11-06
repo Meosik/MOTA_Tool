@@ -1,29 +1,34 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ..core.settings import Settings
-from ..repos.ann_repo import AnnotationsRepo
-from ..services.mota import mota_preview
+from typing import Any, Dict
+from app.services.mota import evaluate_mota
+from app.core.settings import Settings
+settings = Settings()
 
 router = APIRouter()
-settings = Settings()
-ann_repo = AnnotationsRepo(settings.DATA_ROOT)
 
-@router.websocket("/preview")
+@router.websocket("/ws/preview")
 async def ws_preview(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            data = await ws.receive_json()
-            iou = float(data.get("iou_threshold", 0.5))
-            gt_id = data.get("gt_annotation_id")
-            pred_id = data.get("pred_annotation_id")
+            req: Dict[str, Any] = await ws.receive_json()
+            gt_id = req.get("gt_annotation_id")
+            pred_id = req.get("pred_annotation_id")
+            iou = float(req.get("iou_threshold", 0.5))
+
             if not gt_id or not pred_id:
-                await ws.send_json({"error":"missing_annotation_ids"})
+                await ws.send_json({"error": "missing gt_annotation_id or pred_annotation_id"})
                 continue
+
             try:
-                result = mota_preview(settings.DATA_ROOT, gt_id, pred_id, iou)
+                result = evaluate_mota(settings.DATA_ROOT, gt_id, pred_id, iou)
             except FileNotFoundError:
-                await ws.send_json({"error":"annotation_not_found"})
+                await ws.send_json({"error": "annotation id not found"})
                 continue
+            except Exception as e:
+                await ws.send_json({"error": f"internal: {e}"})
+                continue
+
             await ws.send_json(result)
     except WebSocketDisconnect:
         pass
