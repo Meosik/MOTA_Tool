@@ -1,0 +1,16 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --panel-bg: 255 255 255;
+}
+
+.dark :root {
+  --panel-bg: 17 24 39;
+}
+
+html, body, #root {
+  height: 100%;
+}

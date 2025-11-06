@@ -1,10 +1,8 @@
-const BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 
-export async function api(path: string, opts?: {method?:string, json?:any}){
-  const method = opts?.method || 'GET'
-  const headers:any = {'Content-Type':'application/json'}
-  const body = opts?.json ? JSON.stringify(opts.json) : undefined
-  const res = await fetch(`${BASE}${path}`, {method, headers, body})
-  if(!res.ok) throw new Error(await res.text())
-  return res.json()
+export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+
+export async function getJSON<T=any>(url: string): Promise<T>{
+  const r = await fetch(url)
+  if(!r.ok) throw new Error(await r.text())
+  return r.json()
 }
