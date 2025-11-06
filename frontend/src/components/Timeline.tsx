@@ -1,4 +1,3 @@
-
 import { useFrameStore } from '../store/frameStore'
 
 export default function Timeline(){
@@ -9,7 +8,9 @@ export default function Timeline(){
       <button className="px-2 py-1 border rounded" onClick={()=> setCur(cur-1)} disabled={cur<=0}>◀</button>
       <input type="range" min={0} max={max} value={cur} onChange={(e)=> setCur(parseInt(e.target.value))} className="w-full"/>
       <button className="px-2 py-1 border rounded" onClick={()=> setCur(cur+1)} disabled={cur>=max}>▶</button>
-      <div className="w-28 text-right text-sm text-gray-600">{cur+1} / {frames.length}</div>
+      <div className="w-40 text-right text-sm text-gray-600">
+        {frames[cur]?.i ?? 0} (idx {cur+1}/{frames.length})
+      </div>
     </div>
   )
 }

@@ -1,4 +1,3 @@
-
 import { useFrameStore } from '../store/frameStore'
 import { FolderOpen, Upload, Download } from 'lucide-react'
 
@@ -16,9 +15,10 @@ export default function TopBar(){
         <Upload size={16}/> Pred 불러오기
       </button>
       <div className="flex-1" />
-      <button className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
+      <button className="px-3 py-1.5 rounded border inline-flex items-center gap-2" onClick={()=>alert('내보내기는 추후 연결')}>
         <Download size={16}/> 내보내기
       </button>
     </div>
   )
 }
+
