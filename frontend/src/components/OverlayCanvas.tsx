@@ -1,3 +1,4 @@
+// frontend/src/components/OverlayCanvas.tsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useFrameStore } from '../store/frameStore'
 import type { MotRecord } from '../utils/parseMot'
@@ -34,7 +35,7 @@ export default function OverlayCanvas(){
   } = useFrameStore() as any
 
   const meta = frames[cur]
-  const f = meta?.i ?? 0
+  const f = (meta && (Number.isFinite(meta?.i) ? meta.i : (Number.isFinite(meta?.frame) ? meta.frame : (Number.isFinite(meta?.index) ? meta.index : 0)))) || 0
 
   const gtBoxes = useMemo(()=> filterFrame(gt, f), [gt, f])
 
@@ -55,11 +56,13 @@ export default function OverlayCanvas(){
     return prBoxesBase.map(b => (Number(b.id)===Number(tempBox.id) ? {...tempBox} : b))
   }, [prBoxesBase, tempBox])
 
+  const iouSafe = Number.isFinite(iou) ? iou : 0.5
+
   const prBoxes = useMemo(()=>{
     if (!gtBoxes.length) return prBoxesWithTemp
-    const keepIdx = matchOneToOneGreedy(prBoxesWithTemp as unknown as MBox[], gtBoxes as unknown as MBox[], iou)
+    const keepIdx = matchOneToOneGreedy(prBoxesWithTemp as unknown as MBox[], gtBoxes as unknown as MBox[], iouSafe)
     return prBoxesWithTemp.filter((_, idx)=> keepIdx.has(idx))
-  }, [prBoxesWithTemp, gtBoxes, iou])
+  }, [prBoxesWithTemp, gtBoxes, iouSafe])
 
   useEffect(()=>{
     if (!meta) return
@@ -168,7 +171,7 @@ export default function OverlayCanvas(){
     }
 
     ctx.fillStyle = 'rgba(0,0,0,0.6)'
-    ctx.fillRect(6, cssH-22, 220, 16)
+    ctx.fillRect(6, cssH-22, 260, 16)
     ctx.fillStyle = 'white'
     ctx.font = '12px ui-sans-serif, system-ui'
     ctx.fillText(`f=${f} GT:${gtBoxes.length} Pred(visible):${prBoxes.length}`, 10, cssH-10)
@@ -299,7 +302,8 @@ export default function OverlayCanvas(){
 
   function onPointerUp(){
     if (!editing || !tempBox || !meta) { setEditing(null); setTempBox(null); return }
-    applyOverride?.(meta.i, editing.id, { x: tempBox.x, y: tempBox.y, w: tempBox.w, h: tempBox.h, id: editing.id })
+    const frameNum = f
+    applyOverride?.(frameNum, editing.id, { x: tempBox.x, y: tempBox.y, w: tempBox.w, h: tempBox.h, id: editing.id })
     markDirty?.()
     setEditing(null)
     setTempBox(null)

@@ -1,181 +1,296 @@
+// frontend/src/store/frameStore.ts
 import { create } from 'zustand'
-import type { MotRecord } from '../utils/parseMot'
-import { parseMot } from '../utils/parseMot'
 
-export type FrameMeta = { i:number, url:string, w:number, h:number }
-type ImgCache = Map<number, HTMLImageElement>;
+export type Mode = 'local' | 'server-tracks' | 'server-ws'
+export type Box = { x:number; y:number; w:number; h:number; id:number }
+export type FrameMeta = { i: number; url: string; name?: string }
+export type MotRecord = { frame:number; id:number; x:number; y:number; w:number; h:number }
 
-type OverrideBox = { x:number; y:number; w:number; h:number; id:number };
-type OverrideKey = string;
+type Actions = {
+  setFrames: (frames: FrameMeta[]) => void
+  setCur: (idx: number) => void
+  setGT: (recs: MotRecord[]) => void
+  setPred: (recs: MotRecord[]) => void
+  setMode: (m: Mode) => void
+  setIou: (v: number) => void
+  toggleGT: () => void
+  togglePred: () => void
+  applyOverride: (frame: number, id: number, box: Box) => void
+  getPredBox: (frame: number, id: number, fallback: Box) => Box
+  markDirty: () => void
+  syncEditedPredDebounced: () => void
 
-type St = {
-  frames: FrameMeta[]
-  cur: number
-  fps: number
-  gt: MotRecord[]
-  pred: MotRecord[]
-  showGT: boolean
-  showPred: boolean
-  setCur: (i:number)=>void
-  openFrameDir: () => Promise<void>
-  openGT: () => Promise<void>
-  openPred: () => Promise<void>
-  toggleGT: ()=>void
-  togglePred: ()=>void
-  prefetchRadius: number;
-  imgCache: ImgCache;
-  setPrefetchRadius: (k: number) => void;
-  prefetchAround: (center: number) => void;
-  overrides: Map<OverrideKey, OverrideBox>;
-  applyOverride: (frame:number, origId:number, box:OverrideBox)=>void;
-  removeOverride: (frame:number, origId:number)=>void;
-  getPredBox: (frame:number, origId:number, base:OverrideBox)=>OverrideBox; // 합성용
-  exportEditedPred: () => string;  // MOT 텍스트로 내보내기
+  // new for UI buttons / timeline
+  prefetchAround: (idx: number, radius?: number) => void
+  openFrameDir: () => void
+  openGT: () => void
+  openPred: () => void
 }
 
-export const useFrameStore = create<St>((set,get)=>({
-  frames: [],
-  cur: 0,
-  fps: 30,
-  gt: [],
-  pred: [],
-  showGT: true,
-  showPred: true,
-  iou: 0.5,
-  mode: 'local',
+type State = {
+  // data
+  frames: FrameMeta[]
+  cur: number
+  imgCache: Map<number, HTMLImageElement>
 
-  setCur(i){
-    const max = Math.max(0, get().frames.length - 1)
-    set({ cur: Math.max(0, Math.min(i, max)) })
-  },
+  gt: MotRecord[]
+  pred: MotRecord[]
 
-  async openFrameDir(){
-    const picker: any = (window as any).showDirectoryPicker
-    if(!picker){
-      alert('폴더 선택 API가 지원되지 않습니다. Chromium/Edge를 사용하세요.')
-      return
-    }
-    const dir: any = await picker()
-    const arr: FrameMeta[] = []
-    for await (const [name, handle] of dir.entries()){
-      if (handle.kind==='file' && /\.(png|jpe?g)$/i.test(name)) {
-        const digits = name.match(/\d+/g)
-        const i = digits ? parseInt(digits[digits.length-1],10) : 0
-        const file: File = await handle.getFile()
-        const url = URL.createObjectURL(file)
-        arr.push({ i, url, w: 0, h: 0 })
-      }
-    }
-    arr.sort((a,b)=>a.i-b.i)
-    set({ frames: arr, cur: 0 })
-  },
+  // ui
+  mode: Mode
+  iou: number
+  showGT: boolean
+  showPred: boolean
 
-  async openGT(){
-    const inp = document.createElement('input')
-    inp.type = 'file'
-    inp.accept = '.txt,.csv'
-    inp.onchange = async () => {
-      const f = inp.files?.[0]
-      if(!f) return
-      const text = await f.text()
-      const recs = parseMot(text)
-      set({ gt: recs })
-      alert(`GT 로드: ${recs.length} records`)
-    }
-    inp.click()
-  },
+  // overrides & sync
+  overrides: Map<number, Map<number, Box>>
+  dirty: boolean
+  editedPredId?: string
 
-  async openPred(){
-    const inp = document.createElement('input')
-    inp.type = 'file'
-    inp.accept = '.txt,.csv'
-    inp.onchange = async () => {
-      const f = inp.files?.[0]
-      if(!f) return
-      const text = await f.text()
-      const recs = parseMot(text)
-      set({ pred: recs })
-      alert(`Pred 로드: ${recs.length} records`)
-    }
-    inp.click()
-  },
+  // direct actions
+  setFrames: Actions['setFrames']
+  setCur: Actions['setCur']
+  setGT: Actions['setGT']
+  setPred: Actions['setPred']
+  setMode: Actions['setMode']
+  setIou: Actions['setIou']
+  toggleGT: Actions['toggleGT']
+  togglePred: Actions['togglePred']
+  applyOverride: Actions['applyOverride']
+  getPredBox: Actions['getPredBox']
+  markDirty: Actions['markDirty']
+  syncEditedPredDebounced: Actions['syncEditedPredDebounced']
 
-  toggleGT(){ set({ showGT: !get().showGT }) },
-  togglePred(){ set({ showPred: !get().showPred }) },
-  prefetchRadius: 3,
-  imgCache: new Map(),
+  prefetchAround: Actions['prefetchAround']
+  openFrameDir: Actions['openFrameDir']
+  openGT: Actions['openGT']
+  openPred: Actions['openPred']
 
-  setPrefetchRadius(k){ set({ prefetchRadius: Math.max(0, Math.floor(k)) }); },
+  // legacy bundle
+  actions: Actions
+}
 
-  prefetchAround(center){
-    const { frames, prefetchRadius, imgCache } = get();
-    if (!frames.length) return;
-    const lo = Math.max(0, center - prefetchRadius);
-    const hi = Math.min(frames.length - 1, center + prefetchRadius);
+let _debounceTimer: any = null
 
-    for (let i = lo; i <= hi; i++){
-      const meta = frames[i];
-      if (!meta) continue;
-      if (imgCache.has(i)) continue;
-      const im = new Image();
-      im.src = meta.url;
-      // 로드 완료되면 cache 에 저장
-      im.onload = () => {
-        // 이미 누군가 넣었으면 무시
-        if (!get().imgCache.has(i)) {
-          const newMap = new Map(get().imgCache);
-          newMap.set(i, im);
-          set({ imgCache: newMap });
+function parseMOT(text: string): MotRecord[] {
+  const out: MotRecord[] = []
+  const lines = text.split(/\r?\n/)
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const parts = line.split(',').map(s => s.trim())
+    if (parts.length < 6) continue
+    const frame = Number(parts[0])
+    const id = Number(parts[1])
+    const x = Number(parts[2])
+    const y = Number(parts[3])
+    const w = Number(parts[4])
+    const h = Number(parts[5])
+    if ([frame,id,x,y,w,h].some(n => !Number.isFinite(n))) continue
+    out.push({ frame, id, x, y, w, h })
+  }
+  return out
+}
+
+function pickDirectory(cb: (files: FileList) => void) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  ;(input as any).webkitdirectory = true
+  input.multiple = true
+  input.onchange = () => {
+    if (input.files) cb(input.files)
+  }
+  input.click()
+}
+
+function pickFile(accept: string, cb: (file: File) => void) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = accept
+  input.onchange = () => {
+    const f = input.files?.[0]
+    if (f) cb(f)
+  }
+  input.click()
+}
+
+function naturalKey(name: string): (string|number)[] {
+  // split "img_00012.png" -> ["img_", 12, ".png"]
+  const res: (string|number)[] = []
+  name.replace(/(\d+)|(\D+)/g, (_m, num, str) => {
+    if (num) res.push(Number(num))
+    else res.push(String(str))
+    return ''
+  })
+  return res
+}
+
+export const useFrameStore = create<State>((set, get) => {
+  const actions: Actions = {
+    setFrames: (frames) => set({ frames }),
+    setCur: (idx) => set({ cur: Math.max(0, Math.min(idx, get().frames.length-1)) }),
+    setGT: (recs) => set({ gt: recs }),
+    setPred: (recs) => set({ pred: recs }),
+
+    setMode: (m) => set({ mode: m }),
+    setIou: (v) => set({ iou: v }),
+    toggleGT: () => set((s) => ({ showGT: !s.showGT })),
+    togglePred: () => set((s) => ({ showPred: !s.showPred })),
+
+    applyOverride: (frame, id, box) => {
+      const prev = get().overrides
+      const map = new Map(prev)
+      const perFrame = new Map(map.get(frame) || [])
+      perFrame.set(id, { ...box })
+      map.set(frame, perFrame)
+      set({ overrides: map })
+    },
+
+    getPredBox: (frame, id, fallback) => {
+      const perFrame = get().overrides.get(frame)
+      const ov = perFrame?.get(id)
+      return ov ? ov : fallback
+    },
+
+    markDirty: () => set({ dirty: true }),
+
+    syncEditedPredDebounced: () => {
+      clearTimeout(_debounceTimer)
+      _debounceTimer = setTimeout(async () => {
+        const { overrides } = get()
+        try {
+          let lines: string[] = []
+          for (const [frame, idMap] of overrides.entries()) {
+            for (const [id, b] of idMap.entries()) {
+              lines.push(`${frame},${id},${b.x.toFixed(2)},${b.y.toFixed(2)},${b.w.toFixed(2)},${b.h.toFixed(2)},1,-1,-1,-1`)
+            }
+          }
+          const blob = new Blob([lines.join('\\n')], { type: 'text/plain' })
+          const body = new FormData()
+          body.append('kind', 'pred')
+          body.append('file', blob, 'edited_pred.txt')
+          const apiBase = (import.meta as any).env?.VITE_API_BASE || ''
+          const resp = await fetch(`${apiBase}/annotations`, { method: 'POST', body })
+          const json = await resp.json().catch(() => ({} as any))
+          if (json && json.annotation_id) {
+            set({ editedPredId: json.annotation_id, dirty: false })
+          } else {
+            set({ dirty: true })
+            console.warn('upload_annotation: unexpected response', json)
+          }
+        } catch (e) {
+          console.warn('syncEditedPredDebounced failed:', e)
+          set({ dirty: true })
         }
-      };
-      // 바로 넣어도 됨(지연 로드)
-      const newMap = new Map(imgCache);
-      newMap.set(i, im);
-      set({ imgCache: newMap });
-    }
-  },
+      }, 300)
+    },
 
-  overrides: new Map(),
+    prefetchAround: (idx: number, radius = 2) => {
+      const { frames, imgCache } = get()
+      for (let i = Math.max(0, idx - radius); i <= Math.min(frames.length - 1, idx + radius); i++) {
+        if (imgCache.has(i)) continue
+        const meta = frames[i]
+        if (!meta) continue
+        const img = new Image()
+        img.src = meta.url
+        img.onload = () => {
+          const cache = new Map(get().imgCache)
+          cache.set(i, img)
+          set({ imgCache: cache })
+        }
+      }
+    },
 
-  applyOverride(frame, origId, box){
-    const key = `${frame}:${origId}`;
-    const next = new Map(get().overrides);
-    next.set(key, { ...box });
-    set({ overrides: next });
-  },
+    openFrameDir: () => {
+      pickDirectory((files) => {
+        const images = Array.from(files).filter(f =>
+          /\.(png|jpg|jpeg|bmp|webp)$/i.test(f.name)
+        )
+        images.sort((a, b) => {
+          const ka = naturalKey(a.name)
+          const kb = naturalKey(b.name)
+          const n = Math.min(ka.length, kb.length)
+          for (let i=0;i<n;i++){
+            const aa = ka[i], bb = kb[i]
+            if (aa === bb) continue
+            if (typeof aa === 'number' && typeof bb === 'number') return aa - bb
+            return String(aa).localeCompare(String(bb))
+          }
+          return ka.length - kb.length
+        })
+        const frames: FrameMeta[] = images.map((f, idx) => {
+          const url = URL.createObjectURL(f)
+          const m = f.name.match(/(\d+)/)
+          const i = m ? parseInt(m[1], 10) : (idx + 1)
+          return { i, url, name: f.name }
+        })
+        set({ frames, cur: 0 })
+        // prefetch first few
+        get().prefetchAround(0, 4)
+      })
+    },
 
-  removeOverride(frame, origId){
-    const key = `${frame}:${origId}`;
-    if (!get().overrides.has(key)) return;
-    const next = new Map(get().overrides);
-    next.delete(key);
-    set({ overrides: next });
-  },
+    openGT: () => {
+      pickFile('.txt,.csv', (file) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          try {
+            const text = String(reader.result || '')
+            const recs = parseMOT(text)
+            set({ gt: recs })
+          } catch (e) {
+            console.warn('openGT parse failed', e)
+          }
+        }
+        reader.readAsText(file)
+      })
+    },
 
-  getPredBox(frame, origId, base){
-    const key = `${frame}:${origId}`;
-    return get().overrides.get(key) || base;
-  },
+    openPred: () => {
+      pickFile('.txt,.csv', (file) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          try {
+            const text = String(reader.result || '')
+            const recs = parseMOT(text)
+            set({ pred: recs })
+          } catch (e) {
+            console.warn('openPred parse failed', e)
+          }
+        }
+        reader.readAsText(file)
+      })
+    },
+  }
 
-  exportEditedPred(){
-    // 1) 원본 pred 레코드를 frame,id로 그룹핑
-    const { pred, overrides } = get();
-    // pred를 순회하며 override 있으면 치환/ID 변경 반영
-    const lines: string[] = [];
-    for (const r of pred){
-      const key = `${r.frame}:${r.id}`;
-      const ov = overrides.get(key);
-      const id = ov?.id ?? r.id;
-      const x  = ov?.x  ?? r.x;
-      const y  = ov?.y  ?? r.y;
-      const w  = ov?.w  ?? r.w;
-      const h  = ov?.h  ?? r.h;
-      const conf = r.conf ?? 1;
-      // MOT 10필드로 직렬화
-      lines.push([r.frame, id, x, y, w, h, conf, -1, -1, -1].join(','));
-    }
-    // 2) 필요하다면 "새로 추가한 박스"도 lines에 넣을 수 있음 (UI에서 추가 기능을 만들었을 때)
-    return lines.join('\n');
-  },
-}));
+  return {
+    // data
+    frames: [],
+    cur: 0,
+    imgCache: new Map(),
 
+    gt: [],
+    pred: [],
+
+    // ui
+    mode: 'local',
+    iou: 0.5,
+    showGT: true,
+    showPred: true,
+
+    // overrides
+    overrides: new Map(),
+    dirty: false,
+    editedPredId: undefined,
+
+    // expose actions both directly and via legacy bundle
+    ...actions,
+    prefetchAround: actions.prefetchAround,
+    openFrameDir: actions.openFrameDir,
+    openGT: actions.openGT,
+    openPred: actions.openPred,
+    actions,
+  }
+})
+
+export default useFrameStore
