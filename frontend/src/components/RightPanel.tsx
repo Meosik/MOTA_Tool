@@ -1,87 +1,95 @@
-import { useEffect, useRef, useState } from 'react'
-import { useFrameStore } from '../store/frameStore'
+// frontend/src/components/RightPanel.tsx
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import useFrameStore from '../store/frameStore'
 import { PreviewWS } from '../lib/ws'
 
 export default function RightPanel(){
-  const {
-    mode, setMode,
-    iou, setIou,
-    showGT, showPred, toggleGT, togglePred,
-    gtId, predId, editedPredId, dirty, syncEditedPredDebounced
-  } = useFrameStore() as any
+  const { iou, setIou, gtId, predId, editedPredId } = useFrameStore() as any
 
-  const [mota, setMota] = useState<number|null>(null)
-  const wsRef = useRef<PreviewWS|null>(null)
+  // WS 전용으로 항상 동작
+  const [wsState, setWsState] = useState<'open'|'close'|'error'|'idle'>('idle')
+  const [mota, setMota] = useState<number | undefined>(undefined)
+  const [details, setDetails] = useState<{tp?:number; fp?:number; fn?:number; idsw?:number}>({})
 
-  // iou가 비정상(undefined/NaN)일 때 0.5로 보정
+  const wsRef = useRef<PreviewWS | null>(null)
+
+  // 1) 연결 (마운트 시 1회)
   useEffect(() => {
-    if (typeof iou !== 'number' || Number.isNaN(iou)) {
-      setIou(0.5);
+    if (!wsRef.current){
+      wsRef.current = new PreviewWS() // env의 VITE_WS_BASE로 ws://.../ws/preview 자동 구성
+      wsRef.current.connect(
+        (msg) => {
+          // { mota, tp, fp, fn, idsw, error }
+          if (typeof msg.mota === 'number') setMota(msg.mota)
+          setDetails(prev => ({
+            tp:  typeof msg.tp   === 'number' ? msg.tp   : prev.tp,
+            fp:  typeof msg.fp   === 'number' ? msg.fp   : prev.fp,
+            fn:  typeof msg.fn   === 'number' ? msg.fn   : prev.fn,
+            idsw:typeof msg.idsw === 'number' ? msg.idsw : prev.idsw,
+          }))
+        },
+        (state) => setWsState(state)
+      )
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => { wsRef.current?.close(); wsRef.current = null }
+  }, [])
 
-  useEffect(()=>{
-    if (mode !== 'server-ws') { wsRef.current?.close(); wsRef.current = null; setMota(null); return }
-    if (!gtId) return
-    const host = import.meta.env.VITE_WS_BASE || '127.0.0.1:8000'
-    const wsURL = (location.protocol==='https:'?'wss://':'ws://') + host + '/ws/preview'
-    const ws = new PreviewWS(wsURL)
-    ws.connect((msg:any)=>{
-      if ('MOTA' in msg) setMota(Number(msg.MOTA))
-    })
-    wsRef.current = ws
-    return ()=> { ws.close(); wsRef.current=null }
-  }, [mode, gtId])
+  // 2) 의존성 변경 시 프리뷰 전송
+  const iouSafe = useMemo(() => (Number.isFinite(iou) ? iou : 0.5), [iou])
+  useEffect(() => {
+    const gid = gtId
+    const pid = editedPredId || predId
+    if (!gid || !pid) return
+    wsRef.current?.sendPreview({ gt_id: gid, pred_id: pid, iou: iouSafe })
+  }, [gtId, predId, editedPredId, iouSafe])
 
-  useEffect(()=>{
-    if (mode !== 'server-ws') return
-    if (!gtId) return
-    if (dirty) { syncEditedPredDebounced() }
-    const usePred = editedPredId || predId
-    if (!usePred) return
-    wsRef.current?.sendPreview({
-      gt_annotation_id: gtId,
-      pred_annotation_id: usePred,
-      iou_threshold: iou
-    })
-  }, [mode, iou, editedPredId, predId, gtId, dirty, syncEditedPredDebounced])
+  const fmt = (v?: number, digits=3) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '-')
 
   return (
-    <div className="p-3 text-sm space-y-4">
-      <section>
-        <div className="font-semibold mb-1">동작 모드</div>
-        <label><input type="radio" checked={mode==='local'} onChange={()=>setMode('local')}/> 로컬</label><br/>
-        <label><input type="radio" checked={mode==='server-tracks'} onChange={()=>setMode('server-tracks')}/> /tracks</label><br/>
-        <label><input type="radio" checked={mode==='server-ws'} onChange={()=>setMode('server-ws')}/> WS(MOTA)</label>
-      </section>
+    <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 space-y-4">
+      <h2 className="text-lg font-semibold">Metrics (WS)</h2>
 
-      <section>
-        <div className="font-semibold mb-1">IoU 임계값</div>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={0.1}
-            max={0.9}
-            step={0.05}
-            value={Number.isFinite(iou) ? iou : 0.5}
-            onChange={(e) => setIou(parseFloat(e.target.value))}
-            className="w-full"
-          />
-          <span className="w-12 text-right">
-            {Number.isFinite(iou) ? iou.toFixed(2) : '0.50'}
-          </span>
+      <div className="text-xs text-neutral-500">
+        WS: <span className={wsState==='open' ? 'text-green-600' : wsState==='error' ? 'text-red-600' : ''}>
+          {wsState}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">IoU threshold: {fmt(iouSafe, 2)}</label>
+        <input
+          type="range"
+          min={0.1}
+          max={0.9}
+          step={0.05}
+          value={Number.isFinite(iou) ? iou : 0.5}
+          onChange={(e)=> setIou?.(parseFloat(e.target.value))}
+          className="w-full"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div className="col-span-2 flex items-center justify-between">
+          <span className="font-medium">MOTA</span>
+          <span className="tabular-nums">{fmt(mota, 3)}</span>
         </div>
-        {mode === 'server-ws' && (
-          <div className="mt-2 text-gray-800">MOTA: {mota == null ? '-' : mota.toFixed(4)}</div>
-        )}
-      </section>
+        <div className="flex items-center justify-between">
+          <span>TP</span><span className="tabular-nums">{fmt(details.tp, 0)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span>FP</span><span className="tabular-nums">{fmt(details.fp, 0)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span>FN</span><span className="tabular-nums">{fmt(details.fn, 0)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span>IDSW</span><span className="tabular-nums">{fmt(details.idsw, 0)}</span>
+        </div>
+      </div>
 
-      <section>
-        <div className="font-semibold mb-1">가시성</div>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={showGT} onChange={toggleGT}/> GT</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={showPred} onChange={togglePred}/> Pred</label>
-      </section>
-    </div>
+      <div className="text-xs text-neutral-500">
+        gt={gtId || '-'} / pred={editedPredId || predId || '-'}
+      </div>
+    </aside>
   )
 }

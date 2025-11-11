@@ -1,29 +1,23 @@
-import os
-import uuid
-from fastapi import APIRouter, UploadFile, File, Form
-from app.core.settings import Settings
-settings = Settings()
+# backend/app/api/annotations.py
+from fastapi import APIRouter, UploadFile, Form, File, HTTPException
+from fastapi.responses import JSONResponse
+from typing import Literal
+from uuid import uuid4
+from pathlib import Path
+from app.core.config import settings
+import hashlib
 
-router = APIRouter()
+router = APIRouter(prefix="", tags=["annotations"])
 
 @router.post("/annotations")
-async def upload_annotation(kind: str = Form(...), file: UploadFile = File(...)):
-    """Upload MOT-format annotation and return a new annotation_id.
-
-    kind: 'gt' or 'pred' (no strict check here; the caller controls it).
-
-    It saves into settings.DATA_ROOT / 'annotations' directory.
-    """
-    data_root = settings.DATA_ROOT
-    save_dir = os.path.join(data_root, "annotations")
-    os.makedirs(save_dir, exist_ok=True)
-
-    raw = await file.read()
-    suffix = uuid.uuid4().hex[:8]
-    ann_id = f"{kind}_{suffix}"
-    save_path = os.path.join(save_dir, f"{ann_id}.txt")
-
-    with open(save_path, 'wb') as f:
-        f.write(raw)
-
-    return {"annotation_id": ann_id}
+async def upload_annotation(kind: Literal["gt","pred"]=Form(...), file: UploadFile=File(...)):
+    if file is None:
+        raise HTTPException(status_code=400, detail="file is required")
+    ann_id = uuid4().hex
+    dst_dir: Path = settings.DATA_ROOT / "annotations"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / f"{ann_id}.txt"
+    content = await file.read()
+    dst.write_bytes(content)
+    sha = hashlib.sha256(content).hexdigest()
+    return JSONResponse({"annotation_id": ann_id, "sha256": sha})

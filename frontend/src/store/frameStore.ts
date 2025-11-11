@@ -1,5 +1,6 @@
 // frontend/src/store/frameStore.ts
 import { create } from 'zustand'
+import { API_BASE } from '../lib/api';
 
 export type Mode = 'local' | 'server-tracks' | 'server-ws'
 export type Box = { x:number; y:number; w:number; h:number; id:number }
@@ -9,6 +10,10 @@ export type MotRecord = { frame:number; id:number; x:number; y:number; w:number;
 type Actions = {
   setFrames: (frames: FrameMeta[]) => void
   setCur: (idx: number) => void
+  prefetchAround: (idx: number, radius?: number) => void
+  openFrameDir: () => void
+  openGT: () => void
+  openPred: () => void
   setGT: (recs: MotRecord[]) => void
   setPred: (recs: MotRecord[]) => void
   setMode: (m: Mode) => void
@@ -19,37 +24,29 @@ type Actions = {
   getPredBox: (frame: number, id: number, fallback: Box) => Box
   markDirty: () => void
   syncEditedPredDebounced: () => void
-
-  // new for UI buttons / timeline
-  prefetchAround: (idx: number, radius?: number) => void
-  openFrameDir: () => void
-  openGT: () => void
-  openPred: () => void
 }
 
 type State = {
-  // data
   frames: FrameMeta[]
   cur: number
   imgCache: Map<number, HTMLImageElement>
-
   gt: MotRecord[]
   pred: MotRecord[]
-
-  // ui
+  gtId?: string
+  predId?: string
+  editedPredId?: string
   mode: Mode
   iou: number
   showGT: boolean
   showPred: boolean
-
-  // overrides & sync
   overrides: Map<number, Map<number, Box>>
   dirty: boolean
-  editedPredId?: string
-
-  // direct actions
   setFrames: Actions['setFrames']
   setCur: Actions['setCur']
+  prefetchAround: Actions['prefetchAround']
+  openFrameDir: Actions['openFrameDir']
+  openGT: Actions['openGT']
+  openPred: Actions['openPred']
   setGT: Actions['setGT']
   setPred: Actions['setPred']
   setMode: Actions['setMode']
@@ -60,13 +57,6 @@ type State = {
   getPredBox: Actions['getPredBox']
   markDirty: Actions['markDirty']
   syncEditedPredDebounced: Actions['syncEditedPredDebounced']
-
-  prefetchAround: Actions['prefetchAround']
-  openFrameDir: Actions['openFrameDir']
-  openGT: Actions['openGT']
-  openPred: Actions['openPred']
-
-  // legacy bundle
   actions: Actions
 }
 
@@ -115,7 +105,6 @@ function pickFile(accept: string, cb: (file: File) => void) {
 }
 
 function naturalKey(name: string): (string|number)[] {
-  // split "img_00012.png" -> ["img_", 12, ".png"]
   const res: (string|number)[] = []
   name.replace(/(\d+)|(\D+)/g, (_m, num, str) => {
     if (num) res.push(Number(num))
@@ -129,61 +118,6 @@ export const useFrameStore = create<State>((set, get) => {
   const actions: Actions = {
     setFrames: (frames) => set({ frames }),
     setCur: (idx) => set({ cur: Math.max(0, Math.min(idx, get().frames.length-1)) }),
-    setGT: (recs) => set({ gt: recs }),
-    setPred: (recs) => set({ pred: recs }),
-
-    setMode: (m) => set({ mode: m }),
-    setIou: (v) => set({ iou: v }),
-    toggleGT: () => set((s) => ({ showGT: !s.showGT })),
-    togglePred: () => set((s) => ({ showPred: !s.showPred })),
-
-    applyOverride: (frame, id, box) => {
-      const prev = get().overrides
-      const map = new Map(prev)
-      const perFrame = new Map(map.get(frame) || [])
-      perFrame.set(id, { ...box })
-      map.set(frame, perFrame)
-      set({ overrides: map })
-    },
-
-    getPredBox: (frame, id, fallback) => {
-      const perFrame = get().overrides.get(frame)
-      const ov = perFrame?.get(id)
-      return ov ? ov : fallback
-    },
-
-    markDirty: () => set({ dirty: true }),
-
-    syncEditedPredDebounced: () => {
-      clearTimeout(_debounceTimer)
-      _debounceTimer = setTimeout(async () => {
-        const { overrides } = get()
-        try {
-          let lines: string[] = []
-          for (const [frame, idMap] of overrides.entries()) {
-            for (const [id, b] of idMap.entries()) {
-              lines.push(`${frame},${id},${b.x.toFixed(2)},${b.y.toFixed(2)},${b.w.toFixed(2)},${b.h.toFixed(2)},1,-1,-1,-1`)
-            }
-          }
-          const blob = new Blob([lines.join('\\n')], { type: 'text/plain' })
-          const body = new FormData()
-          body.append('kind', 'pred')
-          body.append('file', blob, 'edited_pred.txt')
-          const apiBase = (import.meta as any).env?.VITE_API_BASE || ''
-          const resp = await fetch(`${apiBase}/annotations`, { method: 'POST', body })
-          const json = await resp.json().catch(() => ({} as any))
-          if (json && json.annotation_id) {
-            set({ editedPredId: json.annotation_id, dirty: false })
-          } else {
-            set({ dirty: true })
-            console.warn('upload_annotation: unexpected response', json)
-          }
-        } catch (e) {
-          console.warn('syncEditedPredDebounced failed:', e)
-          set({ dirty: true })
-        }
-      }, 300)
-    },
 
     prefetchAround: (idx: number, radius = 2) => {
       const { frames, imgCache } = get()
@@ -225,7 +159,6 @@ export const useFrameStore = create<State>((set, get) => {
           return { i, url, name: f.name }
         })
         set({ frames, cur: 0 })
-        // prefetch first few
         get().prefetchAround(0, 4)
       })
     },
@@ -233,13 +166,20 @@ export const useFrameStore = create<State>((set, get) => {
     openGT: () => {
       pickFile('.txt,.csv', (file) => {
         const reader = new FileReader()
-        reader.onload = () => {
+        reader.onload = async () => {
           try {
             const text = String(reader.result || '')
             const recs = parseMOT(text)
             set({ gt: recs })
+            const body = new FormData()
+            body.append('kind', 'gt')
+            body.append('file', new Blob([text], { type: 'text/plain' }), file.name || 'gt.txt')
+            const apiBase = (import.meta as any).env?.VITE_API_BASE || ''
+            const resp = await fetch(`${API_BASE}/annotations`, { method: 'POST', body });
+            const json = await resp.json().catch(()=>null as any)
+            if (json?.annotation_id) set({ gtId: json.annotation_id })
           } catch (e) {
-            console.warn('openGT parse failed', e)
+            console.warn('openGT failed', e)
           }
         }
         reader.readAsText(file)
@@ -249,46 +189,98 @@ export const useFrameStore = create<State>((set, get) => {
     openPred: () => {
       pickFile('.txt,.csv', (file) => {
         const reader = new FileReader()
-        reader.onload = () => {
+        reader.onload = async () => {
           try {
             const text = String(reader.result || '')
             const recs = parseMOT(text)
             set({ pred: recs })
+            const body = new FormData()
+            body.append('kind', 'pred')
+            body.append('file', new Blob([text], { type: 'text/plain' }), file.name || 'pred.txt')
+            const apiBase = (import.meta as any).env?.VITE_API_BASE || ''
+            const resp = await fetch(`${API_BASE}/annotations`, { method: 'POST', body });
+            const json = await resp.json().catch(()=>null as any)
+            if (json?.annotation_id) set({ predId: json.annotation_id })
           } catch (e) {
-            console.warn('openPred parse failed', e)
+            console.warn('openPred failed', e)
           }
         }
         reader.readAsText(file)
       })
     },
+
+    setGT: (recs) => set({ gt: recs }),
+    setPred: (recs) => set({ pred: recs }),
+    setMode: (m) => set({ mode: m }),
+    setIou: (v) => set({ iou: v }),
+    toggleGT: () => set((s) => ({ showGT: !s.showGT })),
+    togglePred: () => set((s) => ({ showPred: !s.showPred })),
+
+    applyOverride: (frame, id, box) => {
+      const prev = get().overrides
+      const map = new Map(prev)
+      const perFrame = new Map(map.get(frame) || [])
+      perFrame.set(id, { ...box })
+      map.set(frame, perFrame)
+      set({ overrides: map })
+    },
+
+    getPredBox: (frame, id, fallback) => {
+      const perFrame = get().overrides.get(frame)
+      const ov = perFrame?.get(id)
+      return ov ? ov : fallback
+    },
+
+    markDirty: () => set({ dirty: true }),
+
+    syncEditedPredDebounced: () => {
+      clearTimeout(_debounceTimer)
+      _debounceTimer = setTimeout(async () => {
+        const { overrides } = get()
+        try {
+          let lines: string[] = []
+          for (const [frame, idMap] of overrides.entries()) {
+            for (const [id, b] of idMap.entries()) {
+              lines.push(`${frame},${id},${b.x.toFixed(2)},${b.y.toFixed(2)},${b.w.toFixed(2)},${b.h.toFixed(2)},1,-1,-1,-1`)
+            }
+          }
+          const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
+          const body = new FormData()
+          body.append('kind', 'pred')
+          body.append('file', blob, 'edited_pred.txt')
+          const apiBase = (import.meta as any).env?.VITE_API_BASE || ''
+          const resp = await fetch(`${apiBase}/annotations`, { method: 'POST', body })
+          const json = await resp.json().catch(() => ({} as any))
+          if (json && json.annotation_id) {
+            set({ editedPredId: json.annotation_id, dirty: false })
+          } else {
+            set({ dirty: true })
+            console.warn('upload_annotation: unexpected response', json)
+          }
+        } catch (e) {
+          console.warn('syncEditedPredDebounced failed:', e)
+          set({ dirty: true })
+        }
+      }, 300)
+    },
   }
 
   return {
-    // data
     frames: [],
     cur: 0,
     imgCache: new Map(),
-
     gt: [],
     pred: [],
-
-    // ui
+    gtId: undefined,
+    predId: undefined,
+    editedPredId: undefined,
     mode: 'local',
     iou: 0.5,
     showGT: true,
     showPred: true,
-
-    // overrides
     overrides: new Map(),
     dirty: false,
-    editedPredId: undefined,
-
-    // expose actions both directly and via legacy bundle
     ...actions,
-    prefetchAround: actions.prefetchAround,
-    openFrameDir: actions.openFrameDir,
-    openGT: actions.openGT,
-    openPred: actions.openPred,
     actions,
   }
 })
