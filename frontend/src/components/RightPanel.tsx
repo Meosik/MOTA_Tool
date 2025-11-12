@@ -1,95 +1,123 @@
-// frontend/src/components/RightPanel.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import useFrameStore from '../store/frameStore'
-import { PreviewWS } from '../lib/ws'
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import useFrameStore from '../store/frameStore';
+import { PreviewWS } from '../lib/ws';
 
 export default function RightPanel(){
-  const { iou, setIou, gtId, predId, editedPredId } = useFrameStore() as any
+  const {
+    gtId, predId, editedPredId,
+    iou, setIou,
+    conf, setConf,
+  } = useFrameStore() as any;
 
-  // WS 전용으로 항상 동작
-  const [wsState, setWsState] = useState<'open'|'close'|'error'|'idle'>('idle')
-  const [mota, setMota] = useState<number | undefined>(undefined)
-  const [details, setDetails] = useState<{tp?:number; fp?:number; fn?:number; idsw?:number}>({})
+  const iouSafe  = useMemo(() => (Number.isFinite(iou)  ? iou  : 0.5), [iou]);
+  const confSafe = useMemo(() => (Number.isFinite(conf) ? conf : 0.0), [conf]);
 
-  const wsRef = useRef<PreviewWS | null>(null)
+  const wsRef = useRef<PreviewWS | null>(null);
+  const [wsState, setWsState] = useState<'idle'|'connecting'|'open'|'close'|'error'>('idle');
+  const [mota, setMota] = useState<number|undefined>();
+  const [detail, setDetail] = useState<{tp?:number;fp?:number;fn?:number;idsw?:number;error?:string}>({});
 
-  // 1) 연결 (마운트 시 1회)
   useEffect(() => {
-    if (!wsRef.current){
-      wsRef.current = new PreviewWS() // env의 VITE_WS_BASE로 ws://.../ws/preview 자동 구성
-      wsRef.current.connect(
-        (msg) => {
-          // { mota, tp, fp, fn, idsw, error }
-          if (typeof msg.mota === 'number') setMota(msg.mota)
-          setDetails(prev => ({
-            tp:  typeof msg.tp   === 'number' ? msg.tp   : prev.tp,
-            fp:  typeof msg.fp   === 'number' ? msg.fp   : prev.fp,
-            fn:  typeof msg.fn   === 'number' ? msg.fn   : prev.fn,
-            idsw:typeof msg.idsw === 'number' ? msg.idsw : prev.idsw,
-          }))
-        },
-        (state) => setWsState(state)
-      )
+    if (!wsRef.current) wsRef.current = new PreviewWS();
+    const ws = wsRef.current;
+
+    const gid = gtId;
+    const pid = editedPredId || predId;
+
+    if (gid && pid){
+      ws.connect((msg) => {
+        if (typeof msg.mota === 'number') setMota(msg.mota);
+        setDetail({ tp:msg.tp, fp:msg.fp, fn:msg.fn, idsw:msg.idsw, error:msg.error });
+      }, setWsState);
+      ws.sendPreview({ gt_id: gid, pred_id: pid, iou: iouSafe });
+    } else {
+      ws.close();
+      setWsState('idle');
+      setMota(undefined);
+      setDetail({});
     }
-    return () => { wsRef.current?.close(); wsRef.current = null }
-  }, [])
+  }, [gtId, predId, editedPredId, iouSafe]);
 
-  // 2) 의존성 변경 시 프리뷰 전송
-  const iouSafe = useMemo(() => (Number.isFinite(iou) ? iou : 0.5), [iou])
-  useEffect(() => {
-    const gid = gtId
-    const pid = editedPredId || predId
-    if (!gid || !pid) return
-    wsRef.current?.sendPreview({ gt_id: gid, pred_id: pid, iou: iouSafe })
-  }, [gtId, predId, editedPredId, iouSafe])
+  const stepSmall = 0.01;
+  const stepLarge = 0.05;
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-  const fmt = (v?: number, digits=3) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '-')
+  const adjustIou  = (delta: number) => setIou(clamp01(round2(iouSafe  + delta)));
+  const adjustConf = (delta: number) => setConf(clamp01(round2(confSafe + delta)));
 
   return (
-    <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 space-y-4">
-      <h2 className="text-lg font-semibold">Metrics (WS)</h2>
+    <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
+      <div className="text-sm text-neutral-500">WS: <span className="font-mono">{wsState}</span></div>
 
-      <div className="text-xs text-neutral-500">
-        WS: <span className={wsState==='open' ? 'text-green-600' : wsState==='error' ? 'text-red-600' : ''}>
-          {wsState}
-        </span>
+      <div className="space-y-2">
+        <div className="text-sm font-semibold">IoU Threshold</div>
+        <div className="flex items-center gap-2">
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(-stepLarge)} aria-label="IoU -0.05" title="IoU -0.05">
+            <svg viewBox="0 0 20 12" width="16" height="12">
+              <polygon points="9,6 17,1 17,11" />
+              <polygon points="1,6 9,1 9,11" />
+            </svg>
+          </button>
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(-stepSmall)} aria-label="IoU -0.01" title="IoU -0.01">
+            <svg viewBox="0 0 12 12" width="12" height="12" style={{ transform: 'scaleX(-1)' }}>
+              <polygon points="2,1 10,6 2,11" />
+            </svg>
+          </button>
+          <input type="range" min={0} max={1} step={0.01} value={iouSafe} onChange={(e)=> setIou(clamp01(parseFloat(e.currentTarget.value)))} className="flex-1" />
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(+stepSmall)} aria-label="IoU +0.01" title="IoU +0.01">
+            <svg viewBox="0 0 12 12" width="12" height="12">
+              <polygon points="2,1 10,6 2,11" />
+            </svg>
+          </button>
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(+stepLarge)} aria-label="IoU +0.05" title="IoU +0.05">
+            <svg viewBox="0 0 20 12" width="16" height="12">
+              <polygon points="3,1 11,6 3,11" />
+              <polygon points="11,1 19,6 11,11" />
+            </svg>
+          </button>
+        </div>
+        <div className="text-xs text-neutral-600 font-mono">IoU = {iouSafe.toFixed(2)}</div>
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">IoU threshold: {fmt(iouSafe, 2)}</label>
-        <input
-          type="range"
-          min={0.1}
-          max={0.9}
-          step={0.05}
-          value={Number.isFinite(iou) ? iou : 0.5}
-          onChange={(e)=> setIou?.(parseFloat(e.target.value))}
-          className="w-full"
-        />
+        <div className="text-sm font-semibold">Confidence Threshold</div>
+        <div className="flex items-center gap-2">
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(-stepLarge)} aria-label="conf -0.05" title="conf -0.05">
+            <svg viewBox="0 0 20 12" width="16" height="12">
+              <polygon points="9,6 17,1 17,11" />
+              <polygon points="1,6 9,1 9,11" />
+            </svg>
+          </button>
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(-stepSmall)} aria-label="conf -0.01" title="conf -0.01">
+            <svg viewBox="0 0 12 12" width="12" height="12" style={{ transform: 'scaleX(-1)' }}>
+              <polygon points="2,1 10,6 2,11" />
+            </svg>
+          </button>
+          <input type="range" min={0} max={1} step={0.01} value={confSafe} onChange={(e)=> setConf(clamp01(parseFloat(e.currentTarget.value)))} className="flex-1" />
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(+stepSmall)} aria-label="conf +0.01" title="conf +0.01">
+            <svg viewBox="0 0 12 12" width="12" height="12">
+              <polygon points="2,1 10,6 2,11" />
+            </svg>
+          </button>
+          <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(+stepLarge)} aria-label="conf +0.05" title="conf +0.05">
+            <svg viewBox="0 0 20 12" width="16" height="12">
+              <polygon points="3,1 11,6 3,11" />
+              <polygon points="11,1 19,6 11,11" />
+            </svg>
+          </button>
+        </div>
+        <div className="text-xs text-neutral-600 font-mono">conf ≥ {confSafe.toFixed(2)}</div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        <div className="col-span-2 flex items-center justify-between">
-          <span className="font-medium">MOTA</span>
-          <span className="tabular-nums">{fmt(mota, 3)}</span>
+      <div className="space-y-1">
+        <div className="text-sm font-semibold">MOTA</div>
+        <div className="text-2xl font-mono">{typeof mota === 'number' ? mota.toFixed(4) : '—'}</div>
+        <div className="text-xs text-neutral-600 font-mono">
+          TP:{detail.tp ?? '—'} / FP:{detail.fp ?? '—'} / FN:{detail.fn ?? '—'} / IDSW:{detail.idsw ?? '—'}
         </div>
-        <div className="flex items-center justify-between">
-          <span>TP</span><span className="tabular-nums">{fmt(details.tp, 0)}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span>FP</span><span className="tabular-nums">{fmt(details.fp, 0)}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span>FN</span><span className="tabular-nums">{fmt(details.fn, 0)}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span>IDSW</span><span className="tabular-nums">{fmt(details.idsw, 0)}</span>
-        </div>
-      </div>
-
-      <div className="text-xs text-neutral-500">
-        gt={gtId || '-'} / pred={editedPredId || predId || '-'}
+        {detail.error && <div className="text-xs text-red-500 break-words">{detail.error}</div>}
       </div>
     </aside>
-  )
+  );
 }

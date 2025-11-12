@@ -18,6 +18,7 @@ type Actions = {
   setPred: (recs: MotRecord[]) => void
   setMode: (m: Mode) => void
   setIou: (v: number) => void
+  setConf: (v: number)=>void
   toggleGT: () => void
   togglePred: () => void
   applyOverride: (frame: number, id: number, box: Box) => void
@@ -37,6 +38,7 @@ type State = {
   editedPredId?: string
   mode: Mode
   iou: number
+  conf: number
   showGT: boolean
   showPred: boolean
   overrides: Map<number, Map<number, Box>>
@@ -51,6 +53,7 @@ type State = {
   setPred: Actions['setPred']
   setMode: Actions['setMode']
   setIou: Actions['setIou']
+  setConf: Actions['setConf']
   toggleGT: Actions['toggleGT']
   togglePred: Actions['togglePred']
   applyOverride: Actions['applyOverride']
@@ -213,6 +216,7 @@ export const useFrameStore = create<State>((set, get) => {
     setPred: (recs) => set({ pred: recs }),
     setMode: (m) => set({ mode: m }),
     setIou: (v) => set({ iou: v }),
+    setConf: (v) => set({ conf: v }),
     toggleGT: () => set((s) => ({ showGT: !s.showGT })),
     togglePred: () => set((s) => ({ showPred: !s.showPred })),
 
@@ -276,6 +280,7 @@ export const useFrameStore = create<State>((set, get) => {
     editedPredId: undefined,
     mode: 'local',
     iou: 0.5,
+    conf: 0.5,
     showGT: true,
     showPred: true,
     overrides: new Map(),
