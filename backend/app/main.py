@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.annotations import router as annotations_router
 from app.api.realtime import router as realtime_router
+from app.api.tracks import router as tracks_router  # ★ 추가
 
 app = FastAPI(title=settings.APP_NAME)
 
@@ -19,5 +20,10 @@ app.add_middleware(
 def health():
     return {"ok": True}
 
+# 기존 라우터
 app.include_router(annotations_router)
 app.include_router(realtime_router)
+
+# ★ /tracks 라우터 명시 등록 (prefix 없이 바로 /tracks 노출)
+app.include_router(tracks_router)
+
