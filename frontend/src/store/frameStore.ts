@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { uploadAnnotation } from '../lib/api'
+import { uploadAnnotation, fetchFrameBoxes } from '../lib/api'
 
 export type Box = {
   id: number
@@ -15,6 +15,7 @@ type Frame = { i: number; url: string }
 type EditEntry =
   | { type: 'edit'; frame: number; id: number; prev: Box | null; next: Box | null }
   | { type: 'frame-reset'; frame: number; snapshot: Map<number, Box> }
+  | { type: 'id-change'; frame: number; oldId: number; newId: number; box: Box }
 
 type State = {
   // timeline / images
@@ -31,12 +32,19 @@ type State = {
   conf: number
   showGT: boolean
   showPred: boolean
+  setIou: (v:number)=>void
+  setConf: (v:number)=>void
 
   // overrides & history
-  overrides: Map<number, Map<number, Box>> // key = frame number (Frame.i)
+  overrides: Map<number, Map<number, Box>>
   overrideVersion: number
   undoStack: EditEntry[]
   redoStack: EditEntry[]
+
+  // IDSW 인덱스
+  idswFrames: number[]
+  setIdswFrames: (list:number[]) => void
+  scanIdSwitches: () => Promise<void>
 
   // actions
   setCur: (i: number) => void
@@ -49,6 +57,7 @@ type State = {
 
   getPredBox: (frame: number, id: number, base: Box) => Box
   applyOverrideWithHistory: (frame: number, id: number, box: Box | null) => void
+  changeOverrideIdWithHistory: (frame: number, oldId: number, newId: number, geom: Omit<Box,'id'>) => void
   resetCurrentFrame: () => void
   undo: () => void
   redo: () => void
@@ -65,7 +74,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-// 현재 프레임의 키(항상 Frame.i 사용)
 function getCurrentFrameKey(state: State) {
   const f = state.frames[state.cur]
   return f ? f.i : state.cur
@@ -84,11 +92,78 @@ const useFrameStore = create<State>((set, get) => ({
   conf: 0.0,
   showGT: true,
   showPred: true,
+  setIou: (v)=> set({ iou: v }),
+  setConf: (v)=> set({ conf: v }),
 
   overrides: new Map(),
   overrideVersion: 0,
   undoStack: [],
   redoStack: [],
+
+  idswFrames: [],
+  setIdswFrames: (list) => set({ idswFrames: list }),
+
+  // 빠른 스캔(청크 처리 + 휴식)
+  scanIdSwitches: async () => {
+    const s = get()
+    const { frames, gtAnnotationId, predAnnotationId, iou, conf } = s
+    if (!gtAnnotationId || !predAnnotationId || frames.length === 0) { set({ idswFrames: [] }); return }
+
+    const chunk = 50
+    const idsw: number[] = []
+    let prevMap = new Map<number, number>()
+
+    function toBox(fb:{id:any,bbox:number[],conf?:number}) {
+      const b=fb.bbox.map(Number)
+      return { id:Number(fb.id), x:b[0], y:b[1], w:b[2], h:b[3], conf: (fb as any).conf ?? 1 }
+    }
+    function IoU(a:[number,number,number,number], b:[number,number,number,number]) {
+      const [ax,ay,aw,ah]=a,[bx,by,bw,bh]=b
+      const x1=Math.max(ax,bx), y1=Math.max(ay,by)
+      const x2=Math.min(ax+aw,bx+bw), y2=Math.min(ay+ah,by+bh)
+      const iw=Math.max(0,x2-x1), ih=Math.max(0,y2-y1)
+      const inter=iw*ih, union=aw*ah + bw*bh - inter
+      return union>0 ? inter/union : 0
+    }
+
+    for (let start=0; start<frames.length; start+=chunk) {
+      const end = Math.min(start+chunk, frames.length)
+      for (let k=start; k<end; k++) {
+        const fr = frames[k]
+        const [gt, pred] = await Promise.all([
+          fetchFrameBoxes(gtAnnotationId, fr.i).catch(()=>[]),
+          fetchFrameBoxes(predAnnotationId, fr.i).catch(()=>[]),
+        ])
+
+        const gtb = gt.map(toBox)
+        const prb = pred.map(toBox).filter(p => (p.conf ?? 1) >= conf)
+
+        const usedGt = new Set<number>()
+        const curMap = new Map<number, number>()
+        for (const p of prb) {
+          let bestGt=-1, bestIoU=0
+          for (const g of gtb) {
+            if (usedGt.has(g.id)) continue
+            const v = IoU([p.x,p.y,p.w,p.h],[g.x,g.y,g.w,g.h])
+            if (v > bestIoU) { bestIoU = v; bestGt = g.id }
+            if (bestIoU >= iou) break
+          }
+          if (bestGt>=0 && bestIoU>=iou) { usedGt.add(bestGt); curMap.set(bestGt, p.id) }
+        }
+
+        let switched = false
+        for (const [gtId, pid] of curMap) {
+          const prevPid = prevMap.get(gtId)
+          if (prevPid !== undefined && prevPid !== pid) { switched = true; break }
+        }
+        if (switched) idsw.push(fr.i)
+        prevMap = curMap
+      }
+      set({ idswFrames: idsw.slice() })
+      await new Promise(r=>setTimeout(r, 0))
+    }
+    set({ idswFrames: idsw })
+  },
 
   // ---- actions ----
   setCur: (i) => set({ cur: i }),
@@ -128,23 +203,19 @@ const useFrameStore = create<State>((set, get) => ({
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*'
-    // ✅ 브라우저 속성은 속성으로 지정 (TS 억제 불필요)
-    input.setAttribute('webkitdirectory', '')  // Chrome/Edge
-    input.setAttribute('directory', '')        // 일부 브라우저 호환
+    input.setAttribute('webkitdirectory', '')
+    input.setAttribute('directory', '')
     input.multiple = true
-
     input.onchange = () => {
       const files = Array.from(input.files || [])
         .filter((f) => f.type.startsWith('image/'))
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-
       const frames: Frame[] = files.map((f, idx) => ({
         i: idx + 1,
         url: URL.createObjectURL(f),
       }))
       set({ frames, cur: 0 })
     }
-
     input.click()
   },
 
@@ -184,7 +255,6 @@ const useFrameStore = create<State>((set, get) => ({
     input.click()
   },
 
-  // base + overrides merge
   getPredBox: (frame, id, base) => {
     const o = get().overrides.get(frame)
     if (!o) return base
@@ -192,7 +262,6 @@ const useFrameStore = create<State>((set, get) => ({
     return b ? b : base
   },
 
-  // history + apply (frame은 Frame.i를 넣어야 함)
   applyOverrideWithHistory: (frame, id, box) =>
     set((state) => {
       const map = new Map(state.overrides)
@@ -207,6 +276,30 @@ const useFrameStore = create<State>((set, get) => ({
 
       const undo = state.undoStack.slice()
       undo.push({ type: 'edit', frame, id, prev, next: box })
+      return {
+        overrides: map,
+        overrideVersion: state.overrideVersion + 1,
+        undoStack: undo,
+        redoStack: [],
+      }
+    }),
+
+  changeOverrideIdWithHistory: (frame, oldId, newId, geom) =>
+    set((state) => {
+      if (oldId === newId) return state
+
+      const map = new Map(state.overrides)
+      const byF = new Map(map.get(frame) ?? new Map())
+
+      const current = byF.get(oldId) ?? { id: oldId, ...geom }
+      byF.delete(oldId)
+      byF.set(newId, { id: newId, ...geom })
+
+      if (byF.size) map.set(frame, byF)
+      else map.delete(frame)
+
+      const undo = state.undoStack.slice()
+      undo.push({ type: 'id-change', frame, oldId, newId, box: current })
       return {
         overrides: map,
         overrideVersion: state.overrideVersion + 1,
@@ -253,6 +346,13 @@ const useFrameStore = create<State>((set, get) => ({
         if (last.snapshot.size > 0) map.set(last.frame, new Map(last.snapshot))
         else map.delete(last.frame)
         redo.push(last)
+      } else if (last.type === 'id-change') {
+        const byF = new Map(map.get(last.frame) ?? new Map())
+        byF.delete(last.newId)
+        byF.set(last.oldId, { ...last.box })
+        if (byF.size) map.set(last.frame, byF)
+        else map.delete(last.frame)
+        redo.push(last)
       }
 
       return {
@@ -282,6 +382,13 @@ const useFrameStore = create<State>((set, get) => ({
       } else if (ent.type === 'frame-reset') {
         map.delete(ent.frame)
         undo.push(ent)
+      } else if (ent.type === 'id-change') {
+        const byF = new Map(map.get(ent.frame) ?? new Map())
+        byF.delete(ent.oldId)
+        byF.set(ent.newId, { id: ent.newId, x: ent.box.x, y: ent.box.y, w: ent.box.w, h: ent.box.h, conf: ent.box.conf })
+        if (byF.size) map.set(ent.frame, byF)
+        else map.delete(ent.frame)
+        undo.push(ent)
       }
 
       return {
@@ -292,7 +399,6 @@ const useFrameStore = create<State>((set, get) => ({
       }
     }),
 
-  // 전체 수정본 export (서버 /export/merge 사용)
   exportModifiedPred: async () => {
     const { overrides, predAnnotationId } = get()
     if (!predAnnotationId) {
@@ -300,30 +406,21 @@ const useFrameStore = create<State>((set, get) => ({
       return
     }
 
-    const list: Array<{
-      frame: number
-      id: number
-      x: number
-      y: number
-      w: number
-      h: number
-      conf: number
-    }> = []
+    const list: Array<{ frame: number; id: number; x: number; y: number; w: number; h: number; conf: number }> = []
     for (const [f, byF] of overrides.entries()) {
       for (const [id, b] of byF.entries()) {
         list.push({
           frame: f,
           id,
-          x: b.x,
-          y: b.y,
-          w: b.w,
-          h: b.h,
+          x: Math.round(b.x),
+          y: Math.round(b.y),
+          w: Math.round(b.w),
+          h: Math.round(b.h),
           conf: typeof b.conf === 'number' ? b.conf : 1.0,
         })
       }
     }
 
-    // 오버라이드가 없으면 원본을 바로 다운
     if (list.length === 0) {
       const url = `${import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'}/annotations/${predAnnotationId}/download`
       window.open(url, '_blank')
@@ -351,7 +448,6 @@ const useFrameStore = create<State>((set, get) => ({
 export default useFrameStore
 export { useFrameStore }
 
-// 개발 중 콘솔 접근용
 if (import.meta.env.DEV) {
   // @ts-ignore
   ;(window as any).useFrameStore = useFrameStore

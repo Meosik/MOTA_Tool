@@ -1,9 +1,8 @@
+// frontend/src/components/OverlayCanvas.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useFrameStore, { Box } from '../store/frameStore';
 import { fetchFrameBoxes, type FlatBox } from '../lib/api';
 
-// ===== 스타일/상수 =====
-// GT = 밝은 연두, Pred = 주황 계열
 const COLORS = {
   gtStroke: 'rgba(80, 220, 120, 0.95)',
   gtFill:   'rgba(80, 220, 120, 0.18)',
@@ -30,8 +29,6 @@ function iou(a:[number,number,number,number], b:[number,number,number,number]){
 function rectContains(x:number, y:number, r:{x:number;y:number;w:number;h:number}) {
   return x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h;
 }
-
-// ===== 라벨 유틸 =====
 function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number) {
   const rr = Math.min(r, w/2, h/2);
   ctx.beginPath();
@@ -42,35 +39,25 @@ function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, 
   ctx.arcTo(x,   y,   x+w, y,   rr);
   ctx.closePath();
 }
-function drawIdLabel(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  px: number,
-  py: number,
-  bgColor: string,
-) {
+function drawIdLabel(ctx: CanvasRenderingContext2D, text: string, px: number, py: number, bgColor: string) {
   const padX = 4, padY = 2, radius = 3;
   ctx.save();
   ctx.font = '12px ui-sans-serif, system-ui, -apple-system';
   const tw = ctx.measureText(text).width;
   const th = 12;
-
   const rx = px - 1;
   const ry = Math.max(0, py - th - padY*2);
   const rw = tw + padX*2;
   const rh = th + padY*2;
-
   ctx.fillStyle = bgColor;
   roundRect(ctx, rx, ry, rw, rh, radius);
   ctx.fill();
-
   ctx.fillStyle = '#fff';
   ctx.fillText(text, rx + padX, Math.max(12, py - 2));
   ctx.restore();
 }
 
 export default function OverlayCanvas(){
-  // ---- store selectors ----
   const frames         = useFrameStore(s => s.frames);
   const cur            = useFrameStore(s => s.cur);
   const iouThr         = useFrameStore(s => s.iou);
@@ -86,10 +73,11 @@ export default function OverlayCanvas(){
   const showGT         = useFrameStore(s => s.showGT);
   const showPred       = useFrameStore(s => s.showPred);
 
-  // ---- local states ----
+  const changeId = useFrameStore(s => s.changeOverrideIdWithHistory);
+
+  const rootRef = useRef<HTMLDivElement>(null)
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
-
   const fm = frames[cur] || null;
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
@@ -97,14 +85,11 @@ export default function OverlayCanvas(){
 
   const [activeId, setActiveId] = useState<number|null>(null);
   const [dragMode, setDragMode] = useState<DragMode>('none');
-  const dragAnchor = useRef<{
-    mode: DragMode;
-    box0: Box;
-    startMouse: Vec;
-  } | null>(null);
+  const dragAnchor = useRef<{ mode: DragMode; box0: Box; startMouse: Vec; } | null>(null);
   const [ghostBox, setGhostBox] = useState<Box|null>(null);
 
-  // ---- 레이아웃(이미지 -> 캔버스) ----
+  const [idEdit, setIdEdit] = useState<{show:boolean; frame:number; targetId:number; value:string; left:number; top:number; geom: Omit<Box,'id'>}>({ show:false, frame:0, targetId:0, value:'', left:0, top:0, geom:{x:0,y:0,w:0,h:0} })
+
   const layout = useMemo(()=>{
     const W = cnvRef.current?.clientWidth || 1280;
     const H = cnvRef.current?.clientHeight || 720;
@@ -119,13 +104,12 @@ export default function OverlayCanvas(){
   const toCanvas = (p:Vec) => ({ x: layout.ox + p.x*layout.s, y: layout.oy + p.y*layout.s });
   const fromCanvas = (p:Vec) => ({ x: (p.x - layout.ox)/layout.s, y: (p.y - layout.oy)/layout.s });
 
-  // ---- 이미지/박스 로딩 ----
   useEffect(()=>{
     if (!fm) { setImg(null); return; }
     getImage(fm.url).then(setImg).catch(()=>setImg(null));
     prefetchAround(cur, 3);
-    // 프레임 바뀌면 드래그 상태 초기화
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
+    setIdEdit(v=> ({...v, show:false}))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fm?.url]);
 
@@ -151,15 +135,14 @@ export default function OverlayCanvas(){
     return ()=>{aborted = true;}
   }, [predId, fm?.i]);
 
-  // override 변경(=reset 포함) 시 드래그 상태 초기화
   useEffect(()=>{
     setActiveId(null);
     setDragMode('none');
     setGhostBox(null);
     dragAnchor.current = null;
+    setIdEdit(v=> ({...v, show:false}))
   }, [overrideVer]);
 
-  // ---- Pred 표시용(override 반영 + IoU/Conf 필터) ----
   const predBoxes: Box[] = useMemo(()=>{
     if (!fm) return [];
     const out: Box[] = [];
@@ -168,7 +151,6 @@ export default function OverlayCanvas(){
       const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
       const b = getPredBox(fm.i, base.id, base);
       if ((b.conf ?? 1) < confThr) continue;
-
       if (iouThr > 0 && gtBoxes.length > 0) {
         let maxI = 0;
         for (const g of gtBoxes) {
@@ -184,7 +166,6 @@ export default function OverlayCanvas(){
     return out;
   }, [predBase, fm?.i, overrideVer, iouThr, confThr, gtBoxes, getPredBox]);
 
-  // ---- hit helpers ----
   function hitWhichHandle(cpt:Vec, b:Box): DragMode {
     const p = toCanvas({x:b.x, y:b.y});
     const cw = b.w*layout.s, ch = b.h*layout.s;
@@ -210,7 +191,7 @@ export default function OverlayCanvas(){
     return null;
   }
 
-  // ---- 그리기 ----
+  // draw
   useEffect(()=>{
     const cnv = cnvRef.current; if (!cnv) return;
     const ctx = cnv.getContext('2d'); if (!ctx) return;
@@ -239,11 +220,8 @@ export default function OverlayCanvas(){
         const cw = w*layout.s, ch = h*layout.s;
 
         ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke();
-
-        // 라벨 (박스 밖 위쪽) - 박스색 배경
         drawIdLabel(ctx, String(g.id), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 0.95)');
 
-        // 색 복원
         ctx.strokeStyle = COLORS.gtStroke;
         ctx.fillStyle   = COLORS.gtFill;
       }
@@ -262,10 +240,8 @@ export default function OverlayCanvas(){
         ctx.fillStyle   = COLORS.predFill
         ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke()
 
-        // 라벨 (박스 밖 위쪽) - 박스색 배경(주황)
         drawIdLabel(ctx, String(rb.id), p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 0.95)');
 
-        // 핸들
         ctx.fillStyle = COLORS.predStroke
         const handles = [
           {x:p.x, y:p.y},
@@ -282,7 +258,6 @@ export default function OverlayCanvas(){
     }
   }, [img, layout.W, layout.H, layout.ox, layout.oy, layout.s, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox])
 
-  // ---- 마우스 처리 ----
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -292,7 +267,7 @@ export default function OverlayCanvas(){
     if (!showPred) return;
     const ptC = getCanvasPt(e);
     const hit = hitPredBox(ptC);
-    if (!hit){ setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null; return; }
+    if (!hit){ setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null; setIdEdit(v=>({...v,show:false})); return; }
 
     const handle = hitWhichHandle(ptC, hit);
     const mode: DragMode = handle !== 'none' ? handle : 'move';
@@ -300,23 +275,59 @@ export default function OverlayCanvas(){
     setDragMode(mode);
 
     const ptI = fromCanvas(ptC);
-    dragAnchor.current = {
-      mode,
-      box0: { ...hit },
-      startMouse: ptI,
-    }
+    dragAnchor.current = { mode, box0: { ...hit }, startMouse: ptI }
     setGhostBox({ ...hit });
+    setIdEdit(v=>({...v, show:false}))
   };
+
+  // ID 더블클릭 편집
+  const onDoubleClick = (e:React.MouseEvent<HTMLCanvasElement>) => {
+    const frame = frames[cur]; if (!frame || !showPred) return
+    const ptC = getCanvasPt(e)
+    const hit = hitPredBox(ptC)
+    if (!hit) return
+
+    setActiveId(hit.id)
+    setDragMode('none'); setGhostBox(null); dragAnchor.current = null
+
+    const p = toCanvas({x: hit.x, y: hit.y})
+    const left = p.x + 4
+    const top  = Math.max(0, p.y - 20)
+
+    setIdEdit({
+      show: true,
+      frame: frame.i,
+      targetId: hit.id,
+      value: String(hit.id),
+      left, top,
+      geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf },
+    })
+  }
+
+  const commitIdEdit = () => {
+    if (!idEdit.show) return
+    const newId = Number(idEdit.value)
+    if (!Number.isInteger(newId) || newId <= 0) { setIdEdit(v=>({...v, show:false})); return }
+    if (newId === idEdit.targetId) { setIdEdit(v=>({...v, show:false})); return }
+    // 히스토리 포함 ID 변경
+    useFrameStore.getState().changeOverrideIdWithHistory(
+      idEdit.frame, idEdit.targetId, newId, idEdit.geom
+    )
+    setActiveId(newId)
+    setIdEdit(v=>({...v, show:false}))
+  }
 
   const updateHoverCursor = (ptC:Vec) => {
     const el = cnvRef.current; if (!el) return;
     if (dragMode !== 'none') return;
     const hit = hitPredBox(ptC);
-    if (!hit) { el.style.cursor = 'default'; return; }
-    const h = hitWhichHandle(ptC, hit);
-    if (h === 'resize-nw' || h === 'resize-se') { el.style.cursor = 'nwse-resize'; return; }
-    if (h === 'resize-ne' || h === 'resize-sw') { el.style.cursor = 'nesw-resize'; return; }
-    el.style.cursor = 'move';
+    if (hit) {
+      const h = hitWhichHandle(ptC, hit);
+      if (h === 'resize-nw' || h === 'resize-se') { el.style.cursor = 'nwse-resize'; return; }
+      if (h === 'resize-ne' || h === 'resize-sw') { el.style.cursor = 'nesw-resize'; return; }
+      el.style.cursor = 'move'; return;
+    }
+    el.style.cursor = 'default';
   };
 
   const onMouseMove = (e:React.MouseEvent<HTMLCanvasElement>) => {
@@ -341,7 +352,6 @@ export default function OverlayCanvas(){
       return;
     }
 
-    // 리사이즈: 앵커 고정, 반대편 코너만 이동
     const x2 = box0.x + box0.w;
     const y2 = box0.y + box0.h;
 
@@ -369,10 +379,9 @@ export default function OverlayCanvas(){
   };
 
   const onMouseUp = () => {
-    if (dragMode !== 'none' && ghostBox && activeId != null && fm) {
-      const nextBox: Box = { ...ghostBox, id: activeId };
-      // 커밋(히스토리 포함) — frame key는 Frame.i
-      useFrameStore.getState().applyOverrideWithHistory(fm.i, activeId, nextBox);
+    const frame = frames[cur]
+    if (dragMode !== 'none' && ghostBox && activeId != null && frame) {
+      useFrameStore.getState().applyOverrideWithHistory(frame.i, activeId, { ...ghostBox, id: activeId });
     }
     setDragMode('none');
     setGhostBox(null);
@@ -385,7 +394,6 @@ export default function OverlayCanvas(){
     dragAnchor.current = null;
   };
 
-  // 드래그 중 커서 강제
   useEffect(()=>{
     const el = cnvRef.current; if (!el) return;
     if (dragMode==='none') { el.style.cursor = 'default'; return; }
@@ -395,15 +403,32 @@ export default function OverlayCanvas(){
   }, [dragMode]);
 
   return (
-    <div className="relative w-full h-full bg-black/2">
+    <div ref={rootRef} className="relative w-full h-full bg-black/2 select-none">
       <canvas
         ref={cnvRef}
         className="w-full h-full block"
         onMouseDown={onMouseDown}
+        onDoubleClick={onDoubleClick}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         onMouseLeave={onMouseLeave}
       />
+      {idEdit.show && (
+        <input
+          className="absolute z-10 text-xs px-1 py-0.5 rounded border shadow bg-white"
+          style={{ left: idEdit.left, top: idEdit.top, width: 56 }}
+          autoFocus
+          value={idEdit.value}
+          onMouseDown={(e)=>{ e.stopPropagation(); }}
+          onClick={(e)=>{ e.stopPropagation(); }}
+          onChange={e=>setIdEdit(v=>({...v, value:e.target.value}))}
+          onBlur={commitIdEdit}
+          onKeyDown={(e)=>{
+            if (e.key==='Enter') { e.preventDefault(); commitIdEdit(); }
+            if (e.key==='Escape') { e.preventDefault(); setIdEdit(v=>({...v, show:false})) }
+          }}
+        />
+      )}
     </div>
   );
 }

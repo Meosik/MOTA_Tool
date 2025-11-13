@@ -1,27 +1,47 @@
-
-import TopBar from '../components/TopBar'
-import LeftNav from '../components/LeftNav'
+import { useEffect } from 'react'
+import LeftPanel from '../components/LeftNav'
+import OverlayCanvas from '../components/OverlayCanvas'
 import RightPanel from '../components/RightPanel'
-import Timeline from '../components/Timeline'
+import TopBar from '../components/TopBar'
+import useFrameStore from '../store/frameStore'
 
-export default function AppLayout({children}:{children: React.ReactNode}){
+function KeyboardShortcuts(){
+  const undo = useFrameStore(s=>s.undo)
+  const redo = useFrameStore(s=>s.redo)
+
+  useEffect(()=>{
+    const onKey = (e:KeyboardEvent)=>{
+      const mac = navigator.platform.toLowerCase().includes('mac')
+      const mod = mac ? e.metaKey : e.ctrlKey
+      if (!mod) return
+      if (e.key.toLowerCase()==='z'){
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+      } else if (e.key.toLowerCase()==='y'){
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return ()=> window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
+
+  return null
+}
+
+export default function AppLayout(){
   return (
-    <div className="h-screen w-screen flex flex-col">
+    <div className="w-screen h-screen flex flex-col bg-white">
       <TopBar />
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="w-72 border-r bg-white overflow-y-auto">
-          <LeftNav/>
-        </aside>
-        <main className="flex-1 grid grid-rows-[1fr_auto]">
-          <div className="overflow-hidden bg-neutral-50">
-            {children}
-          </div>
-          <div><Timeline/></div>
-        </main>
-        <aside className="w-80 border-l bg-white overflow-y-auto">
-          <RightPanel/>
-        </aside>
+      <div className="flex-1 grid grid-cols-[16rem_1fr_20rem] min-h-0">
+        <LeftPanel />
+        <div className="min-h-0 min-w-0">
+          <OverlayCanvas />
+        </div>
+        <RightPanel />
       </div>
+      <KeyboardShortcuts />
     </div>
   )
 }
