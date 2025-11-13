@@ -4,6 +4,7 @@ import OverlayCanvas from '../components/OverlayCanvas'
 import RightPanel from '../components/RightPanel'
 import TopBar from '../components/TopBar'
 import useFrameStore from '../store/frameStore'
+import BottomHud from '../components/BottomHud'
 
 function KeyboardShortcuts(){
   const undo = useFrameStore(s=>s.undo)
@@ -38,6 +39,7 @@ export default function AppLayout(){
         <LeftPanel />
         <div className="min-h-0 min-w-0">
           <OverlayCanvas />
+          <BottomHud />
         </div>
         <RightPanel />
       </div>
