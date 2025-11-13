@@ -2,368 +2,408 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useFrameStore, { Box } from '../store/frameStore';
 import { fetchFrameBoxes, type FlatBox } from '../lib/api';
 
-type DragKind = 'move' | 'nw' | 'ne' | 'sw' | 'se';
-const HANDLE_SIZE = 12;
-const MIN_W = 4;
-const MIN_H = 4;
+// ===== 스타일/상수 =====
+// GT = 밝은 연두, Pred = 주황 계열
+const COLORS = {
+  gtStroke: 'rgba(80, 220, 120, 0.95)',
+  gtFill:   'rgba(80, 220, 120, 0.18)',
+  predStroke: 'rgba(255, 140, 0, 0.95)',
+  predFill:   'rgba(255, 140, 0, 0.18)',
+};
+const HANDLE_SIZE = 8;
+const HIT_PAD = 6;
+const LINE_W = 2;
 
-function toBoxArray(frame: number, arr: FlatBox[]): Box[] {
-  return (arr || []).map(b => ({ id: Number(b.id), x: b.bbox[0], y: b.bbox[1], w: b.bbox[2], h: b.bbox[3] }));
+type Vec = { x: number; y: number };
+type DragMode = 'none' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se';
+
+function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v)); }
+function iou(a:[number,number,number,number], b:[number,number,number,number]){
+  const [ax,ay,aw,ah] = a, [bx,by,bw,bh] = b;
+  const x1 = Math.max(ax, bx), y1 = Math.max(ay, by);
+  const x2 = Math.min(ax+aw, bx+bw), y2 = Math.min(ay+ah, by+bh);
+  const iw = Math.max(0, x2-x1), ih = Math.max(0, y2-y1);
+  const inter = iw*ih;
+  const union = aw*ah + bw*bh - inter;
+  return union>0 ? inter/union : 0;
+}
+function rectContains(x:number, y:number, r:{x:number;y:number;w:number;h:number}) {
+  return x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h;
 }
 
-function iouRect(a: Box, b: Box): number {
-  const ax2 = a.x + a.w, ay2 = a.y + a.h;
-  const bx2 = b.x + b.w, by2 = b.y + b.h;
-  const iw = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, b.x));
-  const ih = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, b.y));
-  const inter = iw * ih;
-  if (inter <= 0) return 0;
-  const ua = a.w * a.h + b.w * b.h - inter;
-  return ua > 0 ? inter / ua : 0;
+// ===== 라벨 유틸 =====
+function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number) {
+  const rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, rr);
+  ctx.arcTo(x+w, y+h, x,   y+h, rr);
+  ctx.arcTo(x,   y+h, x,   y,   rr);
+  ctx.arcTo(x,   y,   x+w, y,   rr);
+  ctx.closePath();
+}
+function drawIdLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  px: number,
+  py: number,
+  bgColor: string,
+) {
+  const padX = 4, padY = 2, radius = 3;
+  ctx.save();
+  ctx.font = '12px ui-sans-serif, system-ui, -apple-system';
+  const tw = ctx.measureText(text).width;
+  const th = 12;
+
+  const rx = px - 1;
+  const ry = Math.max(0, py - th - padY*2);
+  const rw = tw + padX*2;
+  const rh = th + padY*2;
+
+  ctx.fillStyle = bgColor;
+  roundRect(ctx, rx, ry, rw, rh, radius);
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, rx + padX, Math.max(12, py - 2));
+  ctx.restore();
 }
 
 export default function OverlayCanvas(){
-  const {
-    frames, cur,
-    showGT, showPred, iou, conf,
-    gtAnnotationId, predAnnotationId,
-    getPredBox, applyOverride,
-    imgCache, cacheImage, getImage, prefetchAround,
-    overrideVersion,
-  } = useFrameStore() as any;
+  // ---- store selectors ----
+  const frames         = useFrameStore(s => s.frames);
+  const cur            = useFrameStore(s => s.cur);
+  const iouThr         = useFrameStore(s => s.iou);
+  const confThr        = useFrameStore(s => s.conf);
+  const getImage       = useFrameStore(s => s.getImage);
+  const prefetchAround = useFrameStore(s => s.prefetchAround);
 
-  /** 캔버스/컨테이너 */
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const gtId           = useFrameStore(s => s.gtAnnotationId);
+  const predId         = useFrameStore(s => s.predAnnotationId);
+  const getPredBox     = useFrameStore(s => s.getPredBox);
+  const overrideVer    = useFrameStore(s => s.overrideVersion);
 
-  /** 현재 프레임 이미지/크기 */
-  const [img, setImg]   = useState<HTMLImageElement | null>(null);
-  const [imgSize, setImgSize] = useState<{w:number; h:number}>({ w: 1280, h: 720 });
-  const [wrapSize, setWrapSize] = useState<{w:number; h:number}>({ w: 800, h: 600 });
+  const showGT         = useFrameStore(s => s.showGT);
+  const showPred       = useFrameStore(s => s.showPred);
 
-  /** 현재 프레임 박스(지연 로드) */
-  const [gtFrame, setGtFrame]   = useState<Box[]>([]);
-  const [prFrame, setPrFrame]   = useState<Box[]>([]);
+  // ---- local states ----
+  const cnvRef = useRef<HTMLCanvasElement>(null);
+  const [img, setImg] = useState<HTMLImageElement|null>(null);
 
-  /** 화면맞춤(레터박스) */
-  const fit = useMemo(() => {
-    const iw = imgSize.w, ih = imgSize.h;
-    const ww = wrapSize.w, wh = wrapSize.h;
-    if (iw <= 0 || ih <= 0 || ww <= 0 || wh <= 0) {
-      return { scale: 1, dw: iw, dh: ih, ox: 0, oy: 0 };
-    }
-    const s = Math.min(ww / iw, wh / ih);
-    const dw = Math.round(iw * s);
-    const dh = Math.round(ih * s);
-    const ox = Math.floor((ww - dw) / 2);
-    const oy = Math.floor((wh - dh) / 2);
-    return { scale: s, dw, dh, ox, oy };
-  }, [imgSize, wrapSize]);
+  const fm = frames[cur] || null;
 
-  /** 래퍼 리사이즈 감지 */
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new (window as any).ResizeObserver((entries:any) => {
-      for (const e of entries) {
-        const cr = e.contentRect;
-        setWrapSize({ w: Math.max(1, Math.floor(cr.width)), h: Math.max(1, Math.floor(cr.height)) });
-      }
-    });
-    ro.observe(el);
-    const r = el.getBoundingClientRect();
-    setWrapSize({ w: Math.max(1, Math.floor(r.width)), h: Math.max(1, Math.floor(r.height)) });
-    return () => ro.disconnect();
-  }, []);
+  const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
+  const [predBase, setPredBase] = useState<FlatBox[]>([]);
 
-  /** 이미지 로더 (스토어 캐시 활용) */
-  const loadImage = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => {
-    if (typeof getImage === 'function') {
-      getImage(url).then(resolve).catch(reject);
-      return;
-    }
-    // 폴백 캐시
-    const cached = imgCache?.get?.(url);
-    if (cached && (cached.complete || (cached.naturalWidth + cached.naturalHeight) > 0)) {
-      resolve(cached);
-      return;
-    }
-    const im = new Image();
-    im.onload = () => {
-      try { cacheImage?.(url, im); } catch {}
-      resolve(im);
-    };
-    im.onerror = reject;
-    im.src = url;
-  });
+  const [activeId, setActiveId] = useState<number|null>(null);
+  const [dragMode, setDragMode] = useState<DragMode>('none');
+  const dragAnchor = useRef<{
+    mode: DragMode;
+    box0: Box;
+    startMouse: Vec;
+  } | null>(null);
+  const [ghostBox, setGhostBox] = useState<Box|null>(null);
 
-  /** 현재 프레임 이미지 불러오기 + 이웃 프리패치 */
-  useEffect(() => {
-    const meta = frames?.[cur];
-    if (!meta?.url) { setImg(null); return; }
-    let alive = true;
-    loadImage(meta.url).then(im => {
-      if (!alive) return;
-      setImg(im);
-      setImgSize({ w: im.naturalWidth || im.width, h: im.naturalHeight || im.height });
-    }).catch(()=>{ if (alive) setImg(null); });
-    // 프리패치
-    if (typeof prefetchAround === 'function') prefetchAround(cur, 2);
-    else {
-      const neighbors = [-2,-1,1,2].map(d => frames?.[cur + d]).filter(Boolean);
-      neighbors.forEach((m:any) => m?.url && loadImage(m.url).catch(()=>{}));
-    }
-    return () => { alive = false; };
-  }, [frames, cur]);
+  // ---- 레이아웃(이미지 -> 캔버스) ----
+  const layout = useMemo(()=>{
+    const W = cnvRef.current?.clientWidth || 1280;
+    const H = cnvRef.current?.clientHeight || 720;
+    const iw = img?.naturalWidth  || 1;
+    const ih = img?.naturalHeight || 1;
+    const s = Math.min(W/iw, H/ih);
+    const dw = iw * s, dh = ih * s;
+    const ox = (W - dw)/2, oy = (H - dh)/2;
+    return { W, H, iw, ih, s, ox, oy, dw, dh };
+  }, [img]);
 
-  /** 현재 프레임 번호 */
-  const fnum = useMemo(() => {
-    const meta = frames?.[cur];
-    return meta?.i ?? (cur + 1);
-  }, [frames, cur]);
+  const toCanvas = (p:Vec) => ({ x: layout.ox + p.x*layout.s, y: layout.oy + p.y*layout.s });
+  const fromCanvas = (p:Vec) => ({ x: (p.x - layout.ox)/layout.s, y: (p.y - layout.oy)/layout.s });
 
-  /** 현재 프레임 GT/Pred — 서버에서 지연 로드 */
-  useEffect(() => {
-    let closed = false;
-    (async () => {
-      // GT
-      if (gtAnnotationId) {
-        try {
-          const flat = await fetchFrameBoxes(gtAnnotationId, fnum);
-          if (!closed) setGtFrame(toBoxArray(fnum, flat));
-        } catch { if (!closed) setGtFrame([]); }
-      } else {
-        setGtFrame([]);
-      }
-      // Pred
-      if (predAnnotationId) {
-        try {
-          const flat = await fetchFrameBoxes(predAnnotationId, fnum);
-          if (!closed) setPrFrame(toBoxArray(fnum, flat));
-        } catch { if (!closed) setPrFrame([]); }
-      } else {
-        setPrFrame([]);
-      }
+  // ---- 이미지/박스 로딩 ----
+  useEffect(()=>{
+    if (!fm) { setImg(null); return; }
+    getImage(fm.url).then(setImg).catch(()=>setImg(null));
+    prefetchAround(cur, 3);
+    // 프레임 바뀌면 드래그 상태 초기화
+    setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fm?.url]);
+
+  useEffect(()=>{
+    let aborted = false;
+    (async ()=>{
+      if (gtId && fm) {
+        try { const bb = await fetchFrameBoxes(gtId, fm.i); if (!aborted) setGtBoxes(bb); }
+        catch { if(!aborted) setGtBoxes([]); }
+      } else setGtBoxes([]);
     })();
-    return () => { closed = true; };
-  }, [gtAnnotationId, predAnnotationId, fnum]);
+    return ()=>{aborted = true;}
+  }, [gtId, fm?.i]);
 
-  /** 오버라이드 적용 + IoU/Conf 필터 */
-  const gtBoxes = useMemo<Box[]>(() => (showGT ? gtFrame : []), [gtFrame, showGT]);
+  useEffect(()=>{
+    let aborted = false;
+    (async ()=>{
+      if (predId && fm) {
+        try { const bb = await fetchFrameBoxes(predId, fm.i); if (!aborted) setPredBase(bb); }
+        catch { if(!aborted) setPredBase([]); }
+      } else setPredBase([]);
+    })();
+    return ()=>{aborted = true;}
+  }, [predId, fm?.i]);
 
-  const prBoxesBase = useMemo<Box[]>(() => {
-    const raw = showPred ? prFrame : [];
-    return raw.map(b => {
-      const ov = getPredBox?.(fnum, b.id, b);
-      return ov && typeof ov === 'object' ? ({ ...ov, conf: (ov as any).conf ?? b.conf }) : b;
-    });
-  }, [prFrame, showPred, fnum, getPredBox, overrideVersion]);
+  // override 변경(=reset 포함) 시 드래그 상태 초기화
+  useEffect(()=>{
+    setActiveId(null);
+    setDragMode('none');
+    setGhostBox(null);
+    dragAnchor.current = null;
+  }, [overrideVer]);
 
-  const iouThr  = useMemo(() => (Number.isFinite(iou)  ? Number(iou)  : 0.5), [iou]);
-  const confThr = useMemo(() => (Number.isFinite(conf) ? Number(conf) : 0.0), [conf]);
+  // ---- Pred 표시용(override 반영 + IoU/Conf 필터) ----
+  const predBoxes: Box[] = useMemo(()=>{
+    if (!fm) return [];
+    const out: Box[] = [];
+    for (const p of predBase) {
+      const [x,y,w,h] = p.bbox.map(Number) as [number,number,number,number];
+      const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
+      const b = getPredBox(fm.i, base.id, base);
+      if ((b.conf ?? 1) < confThr) continue;
 
-  const prBoxesFiltered = useMemo<Box[]>(() => {
-    const byConf = prBoxesBase.filter(pb => (pb.conf ?? 1) >= confThr);
-    if (!gtBoxes?.length) return byConf; // GT 없으면 Conf만 적용
-    return byConf.filter(pb => gtBoxes.some(g => iouRect(g, pb) >= iouThr));
-  }, [prBoxesBase, gtBoxes, iouThr, confThr]);
+      if (iouThr > 0 && gtBoxes.length > 0) {
+        let maxI = 0;
+        for (const g of gtBoxes) {
+          const gbb = g.bbox as [number,number,number,number];
+          const curI = iou([b.x,b.y,b.w,b.h], gbb);
+          if (curI > maxI) maxI = curI;
+          if (maxI >= iouThr) break;
+        }
+        if (maxI < iouThr) continue;
+      }
+      out.push(b);
+    }
+    return out;
+  }, [predBase, fm?.i, overrideVer, iouThr, confThr, gtBoxes, getPredBox]);
 
-  /** 드래그/리사이즈 상태 */
-  const [drag, setDrag] = useState<{ id: number|null; kind: DragKind | null; startX: number; startY: number; orig: Box | null; }>({
-    id: null, kind: null, startX: 0, startY: 0, orig: null
-  });
-
-  /** 좌표 변환 */
-  function clientToImage(px:number, py:number){
-    const { scale, ox, oy } = fit;
-    const ix = (px - ox) / (scale || 1);
-    const iy = (py - oy) / (scale || 1);
-    return { ix, iy };
+  // ---- hit helpers ----
+  function hitWhichHandle(cpt:Vec, b:Box): DragMode {
+    const p = toCanvas({x:b.x, y:b.y});
+    const cw = b.w*layout.s, ch = b.h*layout.s;
+    const handles = [
+      {x:p.x, y:p.y, mode:'resize-nw' as DragMode},
+      {x:p.x+cw, y:p.y, mode:'resize-ne' as DragMode},
+      {x:p.x, y:p.y+ch, mode:'resize-sw' as DragMode},
+      {x:p.x+cw, y:p.y+ch, mode:'resize-se' as DragMode},
+    ];
+    for (const h of handles){
+      if (rectContains(cpt.x, cpt.y, {x:h.x-HANDLE_SIZE/2, y:h.y-HANDLE_SIZE/2, w:HANDLE_SIZE, h:HANDLE_SIZE})) return h.mode;
+    }
+    return 'none';
   }
-  function imageToDisplay(x:number, y:number, w:number, h:number){
-    const { scale, ox, oy } = fit;
-    return { dx: Math.round(ox + x*scale), dy: Math.round(oy + y*scale), dw: Math.round(w*scale), dh: Math.round(h*scale) };
-  }
-
-  /** 히트 테스트 */
-  function handleRectsImage(b: Box){
-    const half = HANDLE_SIZE / (fit.scale || 1) / 2;
-    const { x, y, w, h } = b;
-    return {
-      nw: { x: x - half,     y: y - half,     w: 2*half, h: 2*half },
-      ne: { x: x + w - half, y: y - half,     w: 2*half, h: 2*half },
-      sw: { x: x - half,     y: y + h - half, w: 2*half, h: 2*half },
-      se: { x: x + w - half, y: y + h - half, w: 2*half, h: 2*half },
-    };
-  }
-  function pointInRect(px:number, py:number, r:{x:number;y:number;w:number;h:number}){
-    return px >= r.x && py >= r.y && px <= r.x + r.w && py <= r.y + r.h;
-  }
-  function hitTestImage(ix:number, iy:number){
-    for (let i = prBoxesFiltered.length - 1; i >= 0; i--) {
-      const b = prBoxesFiltered[i];
-      const hr = handleRectsImage(b);
-      if (pointInRect(ix, iy, hr.nw)) return { id: b.id, kind: 'nw' as DragKind, box: b };
-      if (pointInRect(ix, iy, hr.ne)) return { id: b.id, kind: 'ne' as DragKind, box: b };
-      if (pointInRect(ix, iy, hr.sw)) return { id: b.id, kind: 'sw' as DragKind, box: b };
-      if (pointInRect(ix, iy, hr.se)) return { id: b.id, kind: 'se' as DragKind, box: b };
-      if (pointInRect(ix, iy, { x: b.x, y: b.y, w: b.w, h: b.h })) return { id: b.id, kind: 'move' as DragKind, box: b };
+  function hitPredBox(canvasPt:Vec): Box | null {
+    const list = [...predBoxes].sort((a,b)=> (a.id===activeId?-1:0) - (b.id===activeId?-1:0));
+    for (const b of list){
+      const p = toCanvas({x:b.x, y:b.y});
+      const cw = b.w*layout.s, ch = b.h*layout.s;
+      const r = { x:p.x - HIT_PAD, y:p.y - HIT_PAD, w: cw + HIT_PAD*2, h: ch + HIT_PAD*2 };
+      if (rectContains(canvasPt.x, canvasPt.y, r)) return b;
     }
     return null;
   }
 
-  /** 마우스 핸들러 */
-  function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>){
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const { ix, iy } = clientToImage(px, py);
+  // ---- 그리기 ----
+  useEffect(()=>{
+    const cnv = cnvRef.current; if (!cnv) return;
+    const ctx = cnv.getContext('2d'); if (!ctx) return;
 
-    const hit = hitTestImage(ix, iy);
-    const el = e.currentTarget as HTMLCanvasElement;
-    if (hit) {
-      el.style.cursor =
-        hit.kind === 'move' ? 'move' :
-        hit.kind === 'nw' || hit.kind === 'se' ? 'nwse-resize' :
-        'nesw-resize';
-    } else {
-      el.style.cursor = 'default';
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = cnv.clientWidth, cssH = cnv.clientHeight;
+    if (cnv.width !== Math.floor(cssW*dpr) || cnv.height !== Math.floor(cssH*dpr)) {
+      cnv.width = Math.floor(cssW*dpr);
+      cnv.height = Math.floor(cssH*dpr);
     }
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cssW,cssH);
 
-    if (drag.id == null || !drag.kind || !drag.orig) return;
-
-    const dx = ix - drag.startX;
-    const dy = iy - drag.startY;
-    let nx = drag.orig.x, ny = drag.orig.y, nw = drag.orig.w, nh = drag.orig.h;
-
-    switch(drag.kind){
-      case 'move':
-        nx = drag.orig.x + dx; ny = drag.orig.y + dy; break;
-      case 'nw':
-        nx = drag.orig.x + dx; ny = drag.orig.y + dy;
-        nw = drag.orig.w - dx; nh = drag.orig.h - dy; break;
-      case 'ne':
-        ny = drag.orig.y + dy;
-        nw = drag.orig.w + dx; nh = drag.orig.h - dy; break;
-      case 'sw':
-        nx = drag.orig.x + dx;
-        nw = drag.orig.w - dx; nh = drag.orig.h + dy; break;
-      case 'se':
-        nw = drag.orig.w + dx; nh = drag.orig.h + dy; break;
-    }
-
-    if (nw < MIN_W) { nw = MIN_W; if (drag.kind === 'nw' || drag.kind === 'sw') nx = drag.orig.x + (drag.orig.w - nw); }
-    if (nh < MIN_H) { nh = MIN_H; if (drag.kind === 'nw' || drag.kind === 'ne') ny = drag.orig.y + (drag.orig.h - nh); }
-
-    const target = prBoxesFiltered.find(b => b.id === drag.id);
-    const confKeep = target?.conf ?? drag.orig.conf;
-    applyOverride?.(fnum, drag.id, { x: nx, y: ny, w: nw, h: nh, id: drag.id, conf: confKeep });
-  }
-
-  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>){
-    e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const { ix, iy } = clientToImage(px, py);
-    const hit = hitTestImage(ix, iy);
-    if (hit){
-      setDrag({ id: hit.id, kind: hit.kind, startX: ix, startY: iy, orig: { ...hit.box } });
-      (e.currentTarget as HTMLCanvasElement).style.cursor =
-        hit.kind === 'move' ? 'move' :
-        hit.kind === 'nw' || hit.kind === 'se' ? 'nwse-resize' :
-        'nesw-resize';
-    } else {
-      setDrag({ id: null, kind: null, startX: 0, startY: 0, orig: null });
-    }
-  }
-  function onMouseUp(){ setDrag({ id: null, kind: null, startX: 0, startY: 0, orig: null }); }
-
-  /** 렌더링 */
-  useEffect(() => {
-    const cvs = canvasRef.current;
-    const ctx = cvs?.getContext('2d');
-    if (!cvs || !ctx) return;
-
-    cvs.width = wrapSize.w;
-    cvs.height = wrapSize.h;
-    ctx.clearRect(0, 0, cvs.width, cvs.height);
-
-    const { dw, dh, ox, oy } = fit;
-    if (img) ctx.drawImage(img, ox, oy, dw, dh);
-
-    const drawRect = (b:Box, stroke:string, fill:string) => {
-      const a = imageToDisplay(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = stroke;
-      ctx.fillStyle = fill;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(a.dx, a.dy, a.dw, a.dh);
-      ctx.fillRect(a.dx, a.dy, a.dw, a.dh);
-    };
-    const drawLabelTop = (b:Box, bg:string, fg:string, text:string) => {
-      ctx.font = '14px ui-sans-serif, system-ui, -apple-system';
-      const tw = ctx.measureText(text).width + 8;
-      const a = imageToDisplay(b.x, b.y, b.w, b.h);
-      const tx = Math.max(4, Math.min(cvs.width - tw - 4, a.dx));
-      const ty = Math.max(16, a.dy - 6);
-      ctx.fillStyle = bg;
-      ctx.fillRect(tx, ty - 16, tw, 16);
-      ctx.fillStyle = fg;
-      ctx.fillText(text, tx + 4, ty - 3);
-    };
-    const handleRectsDisp = (b:Box) => {
-      const half = HANDLE_SIZE/2;
-      const a = imageToDisplay(b.x, b.y, b.w, b.h);
-      const nw = { x: a.dx - half,         y: a.dy - half,         w: HANDLE_SIZE, h: HANDLE_SIZE };
-      const ne = { x: a.dx + a.dw - half,  y: a.dy - half,         w: HANDLE_SIZE, h: HANDLE_SIZE };
-      const sw = { x: a.dx - half,         y: a.dy + a.dh - half,  w: HANDLE_SIZE, h: HANDLE_SIZE };
-      const se = { x: a.dx + a.dw - half,  y: a.dy + a.dh - half,  w: HANDLE_SIZE, h: HANDLE_SIZE };
-      return { nw, ne, sw, se };
-    };
+    if (img) ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+    else { ctx.fillStyle='#f7f7f7'; ctx.fillRect(0,0,cssW,cssH); }
 
     // GT
-    if (showGT) {
-      for (const b of gtBoxes) {
-        drawRect(b, '#00e676', 'rgba(0,230,118,0.20)');
-        drawLabelTop(b, 'rgba(0,230,118,0.9)', '#000', String(b.id));
+    if (showGT && gtBoxes.length){
+      ctx.lineWidth = LINE_W;
+      ctx.strokeStyle = COLORS.gtStroke;
+      ctx.fillStyle   = COLORS.gtFill;
+
+      for (const g of gtBoxes){
+        const [x,y,w,h] = g.bbox as [number,number,number,number];
+        const p = toCanvas({x,y});
+        const cw = w*layout.s, ch = h*layout.s;
+
+        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke();
+
+        // 라벨 (박스 밖 위쪽) - 박스색 배경
+        drawIdLabel(ctx, String(g.id), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 0.95)');
+
+        // 색 복원
+        ctx.strokeStyle = COLORS.gtStroke;
+        ctx.fillStyle   = COLORS.gtFill;
       }
     }
 
-    // Pred (필터 적용 후 + 핸들)
-    for (const b of prBoxesFiltered) {
-      drawRect(b, '#ff5252', 'rgba(255,82,82,0.18)');
-      const confStr = (b.conf==null ? '' : ` (${Math.max(0, Math.min(1, b.conf)).toFixed(2)})`);
-      drawLabelTop(b, 'rgba(255,82,82,0.9)', '#000', `${b.id}${confStr}`);
-      const hr = handleRectsDisp(b);
-      ctx.fillStyle = '#ff5252';
-      ctx.fillRect(hr.nw.x, hr.nw.y, hr.nw.w, hr.nw.h);
-      ctx.fillRect(hr.ne.x, hr.ne.y, hr.ne.w, hr.ne.h);
-      ctx.fillRect(hr.sw.x, hr.sw.y, hr.sw.w, hr.sw.h);
-      ctx.fillRect(hr.se.x, hr.se.y, hr.se.w, hr.se.h);
+    // Pred
+    if (showPred && predBoxes.length){
+      for (const b of predBoxes){
+        const isActive = activeId === b.id && ghostBox
+        const rb = isActive ? ghostBox! : b
+        const p = toCanvas({x:rb.x, y:rb.y})
+        const cw = rb.w*layout.s, ch = rb.h*layout.s
+
+        ctx.lineWidth = LINE_W
+        ctx.strokeStyle = COLORS.predStroke
+        ctx.fillStyle   = COLORS.predFill
+        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke()
+
+        // 라벨 (박스 밖 위쪽) - 박스색 배경(주황)
+        drawIdLabel(ctx, String(rb.id), p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 0.95)');
+
+        // 핸들
+        ctx.fillStyle = COLORS.predStroke
+        const handles = [
+          {x:p.x, y:p.y},
+          {x:p.x+cw, y:p.y},
+          {x:p.x, y:p.y+ch},
+          {x:p.x+cw, y:p.y+ch},
+        ]
+        for (const h of handles){
+          ctx.beginPath()
+          ctx.rect(h.x - HANDLE_SIZE/2, h.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE)
+          ctx.fill()
+        }
+      }
+    }
+  }, [img, layout.W, layout.H, layout.ox, layout.oy, layout.s, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox])
+
+  // ---- 마우스 처리 ----
+  function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  const onMouseDown = (e:React.MouseEvent<HTMLCanvasElement>) => {
+    if (!showPred) return;
+    const ptC = getCanvasPt(e);
+    const hit = hitPredBox(ptC);
+    if (!hit){ setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null; return; }
+
+    const handle = hitWhichHandle(ptC, hit);
+    const mode: DragMode = handle !== 'none' ? handle : 'move';
+    setActiveId(hit.id);
+    setDragMode(mode);
+
+    const ptI = fromCanvas(ptC);
+    dragAnchor.current = {
+      mode,
+      box0: { ...hit },
+      startMouse: ptI,
+    }
+    setGhostBox({ ...hit });
+  };
+
+  const updateHoverCursor = (ptC:Vec) => {
+    const el = cnvRef.current; if (!el) return;
+    if (dragMode !== 'none') return;
+    const hit = hitPredBox(ptC);
+    if (!hit) { el.style.cursor = 'default'; return; }
+    const h = hitWhichHandle(ptC, hit);
+    if (h === 'resize-nw' || h === 'resize-se') { el.style.cursor = 'nwse-resize'; return; }
+    if (h === 'resize-ne' || h === 'resize-sw') { el.style.cursor = 'nesw-resize'; return; }
+    el.style.cursor = 'move';
+  };
+
+  const onMouseMove = (e:React.MouseEvent<HTMLCanvasElement>) => {
+    const ptC = getCanvasPt(e);
+    updateHoverCursor(ptC);
+
+    if (dragMode === 'none' || !dragAnchor.current || !ghostBox) return;
+
+    const ptI = fromCanvas(ptC);
+    const { mode, box0, startMouse } = dragAnchor.current;
+
+    if (mode === 'move'){
+      const dx = ptI.x - startMouse.x;
+      const dy = ptI.y - startMouse.y;
+      let nx = clamp(box0.x + dx, 0, layout.iw);
+      let ny = clamp(box0.y + dy, 0, layout.ih);
+      let nw = box0.w;
+      let nh = box0.h;
+      nx = clamp(nx, 0, layout.iw - nw);
+      ny = clamp(ny, 0, layout.ih - nh);
+      setGhostBox(prev => prev ? ({ ...prev, x:nx, y:ny, w:nw, h:nh }) : null);
+      return;
     }
 
-    // HUD
-    ctx.fillStyle = '#111';
-    const shown = prBoxesFiltered.length, total = prFrame.length;
-    const hud = `pred shown: ${shown} / ${total} (IoU ≥ ${(Number.isFinite(iou)?Number(iou):0.5).toFixed(2)}, conf ≥ ${(Number.isFinite(conf)?Number(conf):0.0).toFixed(2)})`;
-    const w = ctx.measureText(hud).width + 12;
-    const y = cvs.height - 10;
-    ctx.fillRect(8, y - 16, w, 16);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(hud, 14, y - 4);
-  }, [img, wrapSize, fit, gtBoxes, prBoxesFiltered, prFrame.length, showGT, iou, conf, overrideVersion]);
+    // 리사이즈: 앵커 고정, 반대편 코너만 이동
+    const x2 = box0.x + box0.w;
+    const y2 = box0.y + box0.h;
+
+    let ax:number, ay:number, bx:number, by:number;
+    switch (mode) {
+      case 'resize-nw': ax = x2; ay = y2; bx = ptI.x; by = ptI.y; break;
+      case 'resize-ne': ax = box0.x; ay = y2; bx = ptI.x; by = ptI.y; break;
+      case 'resize-sw': ax = x2; ay = box0.y; bx = ptI.x; by = ptI.y; break;
+      case 'resize-se': ax = box0.x; ay = box0.y; bx = ptI.x; by = ptI.y; break;
+      default: return;
+    }
+
+    let x = Math.min(ax, bx);
+    let y = Math.min(ay, by);
+    let w = Math.abs(bx - ax);
+    let h = Math.abs(by - ay);
+
+    const MIN = 1;
+    w = Math.max(MIN, w);
+    h = Math.max(MIN, h);
+    x = clamp(x, 0, layout.iw - w);
+    y = clamp(y, 0, layout.ih - h);
+
+    setGhostBox(prev => prev ? ({ ...prev, x, y, w, h }) : null);
+  };
+
+  const onMouseUp = () => {
+    if (dragMode !== 'none' && ghostBox && activeId != null && fm) {
+      const nextBox: Box = { ...ghostBox, id: activeId };
+      // 커밋(히스토리 포함) — frame key는 Frame.i
+      useFrameStore.getState().applyOverrideWithHistory(fm.i, activeId, nextBox);
+    }
+    setDragMode('none');
+    setGhostBox(null);
+    dragAnchor.current = null;
+  };
+
+  const onMouseLeave = () => {
+    setDragMode('none');
+    setGhostBox(null);
+    dragAnchor.current = null;
+  };
+
+  // 드래그 중 커서 강제
+  useEffect(()=>{
+    const el = cnvRef.current; if (!el) return;
+    if (dragMode==='none') { el.style.cursor = 'default'; return; }
+    if (dragMode==='move') { el.style.cursor = 'move'; return; }
+    if (dragMode==='resize-nw' || dragMode==='resize-se') { el.style.cursor = 'nwse-resize'; return; }
+    if (dragMode==='resize-ne' || dragMode==='resize-sw') { el.style.cursor = 'nesw-resize'; return; }
+  }, [dragMode]);
 
   return (
-    <div ref={wrapRef} className="w-full h-full overflow-hidden">
+    <div className="relative w-full h-full bg-black/2">
       <canvas
-        ref={canvasRef}
-        style={{ display:'block', width:'100%', height:'100%', cursor:'default' }}
+        ref={cnvRef}
+        className="w-full h-full block"
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        onMouseLeave={onMouseLeave}
       />
     </div>
   );
 }
-
