@@ -1,5 +1,5 @@
 // frontend/src/lib/ws.ts
-export type PreviewRequest = { gt_id: string; pred_id: string; iou: number; conf: number }
+export type PreviewRequest = { gt_id: string; pred_id: string; iou: number }
 export type PreviewResponse = {
   MOTA?: number; mota?: number;
   TP?: number; tp?: number;

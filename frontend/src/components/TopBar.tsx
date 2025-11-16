@@ -1,5 +1,5 @@
 // frontend/src/components/TopBar.tsx
-import useFrameStore from '../store/frameStore'
+import { useFrameStore } from '../store/frameStore'
 import { FolderOpen, Upload, Download, RotateCcw, RotateCw, Eraser } from 'lucide-react'
 
 export default function TopBar(){
