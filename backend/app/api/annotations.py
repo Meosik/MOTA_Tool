@@ -1,32 +1,23 @@
-import os, json, hashlib
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from ..core.settings import Settings
-from ..repos.ann_repo import AnnotationsRepo
-from ..services.normalize import normalize_annotation
+# backend/app/api/annotations.py
+from fastapi import APIRouter, UploadFile, Form, File, HTTPException
+from fastapi.responses import JSONResponse
+from typing import Literal
+from uuid import uuid4
+from pathlib import Path
+from app.core.config import settings
+import hashlib
 
-router = APIRouter()
-settings = Settings()
-repo = AnnotationsRepo(settings.DATA_ROOT)
+router = APIRouter(prefix="", tags=["annotations"])
 
-@router.post("")
-async def upload_annotation(kind: str = Form(...), file: UploadFile = File(...)):
-    assert kind in ("gt","pred")
-    raw = await file.read()
-    sha = hashlib.sha256(raw).hexdigest()
-    ann_dir = repo.ensure_dir(sha)
-    src_path = os.path.join(ann_dir, f"source.{file.filename.split('.')[-1].lower()}")
-    with open(src_path, "wb") as f:
-        f.write(raw)
-
-    norm = normalize_annotation(src_path)
-    with open(os.path.join(ann_dir, "normalized.json"), "w", encoding="utf-8") as f:
-        json.dump(norm, f, ensure_ascii=False)
-
-    ann_id = repo.register(kind=kind, sha=sha, src_path=src_path)
-    return {"annotation_id": ann_id, "sha256": sha}
-
-@router.head("")
-def head_by_sha256(sha256: str):
-    if repo.exists_by_sha(sha256):
-        return {"x-annotation-id": repo.get_id_by_sha(sha256)}
-    raise HTTPException(status_code=404, detail="not found")
+@router.post("/annotations")
+async def upload_annotation(kind: Literal["gt","pred"]=Form(...), file: UploadFile=File(...)):
+    if file is None:
+        raise HTTPException(status_code=400, detail="file is required")
+    ann_id = uuid4().hex
+    dst_dir: Path = settings.DATA_ROOT / "annotations"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / f"{ann_id}.txt"
+    content = await file.read()
+    dst.write_bytes(content)
+    sha = hashlib.sha256(content).hexdigest()
+    return JSONResponse({"annotation_id": ann_id, "sha256": sha})

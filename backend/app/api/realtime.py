@@ -1,22 +1,51 @@
+# backend/app/api/realtime.py
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ..core.settings import Settings
-from ..repos.ann_repo import AnnotationsRepo
-from ..services.mota import mota_preview
+import json
+from pathlib import Path
+from app.core.config import settings
+from app.services.mota import evaluate_mota
 
-router = APIRouter()
-settings = Settings()
-ann_repo = AnnotationsRepo(settings.DATA_ROOT)
+router = APIRouter(prefix="/ws", tags=["ws"])
 
 @router.websocket("/preview")
 async def ws_preview(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            data = await ws.receive_json()
-            iou = float(data.get("iou_threshold", 0.5))
-            gt_id = data.get("gt_annotation_id")
-            pred_id = data.get("pred_annotation_id")
-            result = mota_preview(settings.DATA_ROOT, gt_id, pred_id, iou)
-            await ws.send_json(result)
+            raw = await ws.receive_text()
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                await ws.send_text(json.dumps({"error":"invalid JSON"}))
+                continue
+
+            gt_id = payload.get("gt_id")
+            pred_id = payload.get("pred_id")
+            iou_thr = payload.get("iou", 0.5)
+            try:
+                iou_thr = float(iou_thr)
+            except Exception:
+                iou_thr = 0.5
+
+            if not gt_id or not pred_id:
+                await ws.send_text(json.dumps({"error":"gt_id/pred_id required"}))
+                continue
+
+            root = settings.DATA_ROOT / "annotations"
+            gt_path = root / f"{gt_id}.txt"
+            pr_path = root / f"{pred_id}.txt"
+            if not gt_path.exists() or not pr_path.exists():
+                await ws.send_text(json.dumps({"error":"annotation id not found"}))
+                continue
+
+            mota, stats = evaluate_mota(gt_path, pr_path, iou_thr)
+            resp = {
+                "MOTA": mota,
+                "TP": stats["TP"],
+                "FP": stats["FP"],
+                "FN": stats["FN"],
+                "IDSW": stats["IDSW"],
+            }
+            await ws.send_text(json.dumps(resp))
     except WebSocketDisconnect:
         pass
