@@ -106,6 +106,7 @@ export default function OverlayCanvas(){
 
   useEffect(()=>{
     if (!fm) { setImg(null); return; }
+    if (!fm.url) { setImg(null); return; }
     getImage(fm.url).then(setImg).catch(()=>setImg(null));
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;

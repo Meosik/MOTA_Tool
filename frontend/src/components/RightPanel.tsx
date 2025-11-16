@@ -45,8 +45,8 @@ export default function RightPanel() {
       setMota(undefined); setDetail({}); setWsState(prev => prev==='—' ? '—' : prev)
       return
     }
-    ws.sendPreview({ gt_id: gid, pred_id: pid, iou: iouSafe })
-  }, [gtAnnotationId, predAnnotationId, iouSafe, overrideVersion])
+    ws.sendPreview({ gt_id: gid, pred_id: pid, iou: iouSafe, conf: confSafe})
+  }, [gtAnnotationId, predAnnotationId, iouSafe, confSafe, overrideVersion])
 
   // 슬라이더 조정 유틸
   const stepSmall = 0.01

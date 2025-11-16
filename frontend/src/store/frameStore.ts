@@ -1,99 +1,149 @@
-import { create } from 'zustand'
-import { uploadAnnotation, fetchFrameBoxes } from '../lib/api'
+// frontend/src/store/frameStore.ts
+import { create } from 'zustand';
+import { fetchFrameBoxes, fetchTracksWindow, type FlatBox } from '../lib/api';
 
-export type Box = {
-  id: number
-  x: number
-  y: number
-  w: number
-  h: number
-  conf?: number
-}
+export type Frame = { i:number; url?:string; file?:File };
+export type Box = { id:number; x:number; y:number; w:number; h:number; conf?:number };
 
-type Frame = { i: number; url: string }
-
-type EditEntry =
-  | { type: 'edit'; frame: number; id: number; prev: Box | null; next: Box | null }
-  | { type: 'frame-reset'; frame: number; snapshot: Map<number, Box> }
-  | { type: 'id-change'; frame: number; oldId: number; newId: number; box: Box }
+type EditEntry = { frame:number; id:number; before?:Box; after?:Box };
 
 type State = {
-  // timeline / images
-  frames: Frame[]
-  cur: number
-  imgCache: Map<string, HTMLImageElement>
+  // 타임라인/이미지
+  frames: Frame[];
+  cur: number;
+  isPlaying: boolean;
 
-  // annotations
-  gtAnnotationId: string | null
-  predAnnotationId: string | null
+  // 로딩 표시(선택)
+  isLoading: boolean;
+  loadProgress: number; // 0~1
 
-  // overlay options
-  iou: number
-  conf: number
-  showGT: boolean
-  showPred: boolean
-  setIou: (v:number)=>void
-  setConf: (v:number)=>void
+  // 어노테이션 id
+  gtAnnotationId?: string;
+  predAnnotationId?: string;
 
-  // overrides & history
-  overrides: Map<number, Map<number, Box>>
-  overrideVersion: number
-  undoStack: EditEntry[]
-  redoStack: EditEntry[]
+  // 표시 옵션/슬라이더
+  iou: number;
+  conf: number;
+  showGT: boolean;
+  showPred: boolean;
 
-  // IDSW 인덱스
-  idswFrames: number[]
-  setIdswFrames: (list:number[]) => void
-  scanIdSwitches: () => Promise<void>
+  // 오버레이 오버라이드 + 히스토리
+  overrides: Map<number, Map<number, Box>>;
+  overrideVersion: number;
+  undoStack: EditEntry[];
+  redoStack: EditEntry[];
 
-  // actions
-  setCur: (i: number) => void
-  prefetchAround: (i: number, k: number) => void
-  getImage: (url: string) => Promise<HTMLImageElement>
+  // ID Switch 감지
+  idswFrames: number[];
 
-  openFrameDir: () => void
-  openGT: () => void
-  openPred: () => void
+  // 이미지 캐시 (디코드된 Image)
+  imgCache: Map<string, Promise<HTMLImageElement>>;
 
-  getPredBox: (frame: number, id: number, base: Box) => Box
-  applyOverrideWithHistory: (frame: number, id: number, box: Box | null) => void
-  changeOverrideIdWithHistory: (frame: number, oldId: number, newId: number, geom: Omit<Box,'id'>) => void
-  resetCurrentFrame: () => void
-  undo: () => void
-  redo: () => void
+  // 액션
+  setFrames: (frames: Frame[]) => void;
+  setCur: (idx:number)=>void;
+  setPlaying: (v:boolean)=>void;
 
-  exportModifiedPred: () => Promise<void>
+  openFrameDir: ()=>void;
+  openGT: ()=>void;
+  openPred: ()=>void;
+
+  setGT: (annId?:string)=>void;
+  setPred: (annId?:string)=>void;
+
+  setIou: (v:number)=>void;
+  setConf: (v:number)=>void;
+
+  getImage: (url:string)=>Promise<HTMLImageElement>;
+  prefetchAround: (center:number, radius?:number)=>void;
+
+  // 배치 캐시
+  fillCacheWindow: (kind:'gt'|'pred', f0:number, f1:number)=>Promise<void>;
+  getPredBox: (frame:number, id:number, base:Box)=>Box;
+
+  applyOverrideWithHistory:(frame:number, id:number, next:Box)=>void;
+  changeOverrideIdWithHistory:(frame:number, oldId:number, newId:number, geom:Omit<Box,'id'>)=>void;
+  undo: ()=>void;
+  redo: ()=>void;
+  resetFrame: (frame:number)=>void;
+  resetCurrentFrame: ()=>void;
+  exportModifiedPred: ()=>void;
+  scanIdSwitches: ()=>Promise<void>;
+};
+
+// ---- Tracks 캐시 (변경 없음)
+const gtCache = new Map<string, FlatBox[]>();
+const prCache = new Map<string, FlatBox[]>();
+const inFlight = new Map<string, Promise<void>>();
+function toBox(fb:FlatBox): Box {
+  const [x,y,w,h] = fb.bbox.map(Number) as [number,number,number,number];
+  return { id: Number(fb.id), x,y,w,h, ...(fb.conf!=null?{conf:Number(fb.conf)}:{}) };
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const im = new Image()
-    im.onload = () => resolve(im)
-    im.onerror = reject
-    im.src = url
-  })
+// ---- ObjectURL LRU (핵심 개선)
+const MAX_URLS = 400; // 메모리/디코드 부하 제한
+const urlLRU: string[] = [];             // 최근 사용 순
+const urlOwner = new Map<string, number>(); // url -> frameIndex
+
+function touchURL(url:string){
+  const i = urlLRU.indexOf(url);
+  if (i>=0) urlLRU.splice(i,1);
+  urlLRU.push(url);
+  while (urlLRU.length > MAX_URLS){
+    const old = urlLRU.shift()!;
+    try { URL.revokeObjectURL(old); } catch {}
+  }
 }
 
-function getCurrentFrameKey(state: State) {
-  const f = state.frames[state.cur]
-  return f ? f.i : state.cur
+function attachURLToFrame(frames: Frame[], idx:number, url:string): Frame[] {
+  const nf = frames.slice();
+  nf[idx] = { ...nf[idx], url };
+  return nf;
 }
 
+// 지연 URL 생성: 현재/주변만 필요 때 생성
+function ensureObjectURLFor(index:number){
+  const st = useFrameStore.getState();
+  const frames = st.frames;
+  if (index<0 || index>=frames.length) return;
+  const f = frames[index];
+  if (f.url) { touchURL(f.url); return; }
+  if (!f.file) return; // URL 생성 불가
+  const url = URL.createObjectURL(f.file);
+  urlOwner.set(url, index);
+  touchURL(url);
+  useFrameStore.setState({ frames: attachURLToFrame(frames, index, url) });
+}
+
+// ---- Prefetch 스케줄링 (과도한 폭주 방지)
+let prefetchTimer: number | null = null;
+function schedulePrefetch(center:number, radius:number){
+  if (prefetchTimer!=null) { cancelAnimationFrame(prefetchTimer); prefetchTimer = null; }
+  prefetchTimer = requestAnimationFrame(()=>{
+    const st = useFrameStore.getState();
+    const N = st.frames.length;
+    const lo = Math.max(0, center - radius);
+    const hi = Math.min(N-1, center + radius);
+    for (let i=lo; i<=hi; i++) ensureObjectURLFor(i);
+  });
+}
+
+// ---- Zustand
 const useFrameStore = create<State>((set, get) => ({
-  // ---- initial ----
   frames: [],
   cur: 0,
-  imgCache: new Map(),
+  isPlaying: false,
 
-  gtAnnotationId: null,
-  predAnnotationId: null,
+  isLoading: false,
+  loadProgress: 0,
+
+  gtAnnotationId: undefined,
+  predAnnotationId: undefined,
 
   iou: 0.5,
   conf: 0.0,
   showGT: true,
   showPred: true,
-  setIou: (v)=> set({ iou: v }),
-  setConf: (v)=> set({ conf: v }),
 
   overrides: new Map(),
   overrideVersion: 0,
@@ -101,354 +151,344 @@ const useFrameStore = create<State>((set, get) => ({
   redoStack: [],
 
   idswFrames: [],
-  setIdswFrames: (list) => set({ idswFrames: list }),
 
-  // 빠른 스캔(청크 처리 + 휴식)
-  scanIdSwitches: async () => {
-    const s = get()
-    const { frames, gtAnnotationId, predAnnotationId, iou, conf } = s
-    if (!gtAnnotationId || !predAnnotationId || frames.length === 0) { set({ idswFrames: [] }); return }
+  imgCache: new Map(),
 
-    const chunk = 50
-    const idsw: number[] = []
-    let prevMap = new Map<number, number>()
+  setFrames: (frames)=> set({ frames, cur: 0 }),
 
-    function toBox(fb:{id:any,bbox:number[],conf?:number}) {
-      const b=fb.bbox.map(Number)
-      return { id:Number(fb.id), x:b[0], y:b[1], w:b[2], h:b[3], conf: (fb as any).conf ?? 1 }
-    }
-    function IoU(a:[number,number,number,number], b:[number,number,number,number]) {
-      const [ax,ay,aw,ah]=a,[bx,by,bw,bh]=b
-      const x1=Math.max(ax,bx), y1=Math.max(ay,by)
-      const x2=Math.min(ax+aw,bx+bw), y2=Math.min(ay+ah,by+bh)
-      const iw=Math.max(0,x2-x1), ih=Math.max(0,y2-y1)
-      const inter=iw*ih, union=aw*ah + bw*bh - inter
-      return union>0 ? inter/union : 0
-    }
-
-    for (let start=0; start<frames.length; start+=chunk) {
-      const end = Math.min(start+chunk, frames.length)
-      for (let k=start; k<end; k++) {
-        const fr = frames[k]
-        const [gt, pred] = await Promise.all([
-          fetchFrameBoxes(gtAnnotationId, fr.i).catch(()=>[]),
-          fetchFrameBoxes(predAnnotationId, fr.i).catch(()=>[]),
-        ])
-
-        const gtb = gt.map(toBox)
-        const prb = pred.map(toBox).filter(p => (p.conf ?? 1) >= conf)
-
-        const usedGt = new Set<number>()
-        const curMap = new Map<number, number>()
-        for (const p of prb) {
-          let bestGt=-1, bestIoU=0
-          for (const g of gtb) {
-            if (usedGt.has(g.id)) continue
-            const v = IoU([p.x,p.y,p.w,p.h],[g.x,g.y,g.w,g.h])
-            if (v > bestIoU) { bestIoU = v; bestGt = g.id }
-            if (bestIoU >= iou) break
-          }
-          if (bestGt>=0 && bestIoU>=iou) { usedGt.add(bestGt); curMap.set(bestGt, p.id) }
-        }
-
-        let switched = false
-        for (const [gtId, pid] of curMap) {
-          const prevPid = prevMap.get(gtId)
-          if (prevPid !== undefined && prevPid !== pid) { switched = true; break }
-        }
-        if (switched) idsw.push(fr.i)
-        prevMap = curMap
-      }
-      set({ idswFrames: idsw.slice() })
-      await new Promise(r=>setTimeout(r, 0))
-    }
-    set({ idswFrames: idsw })
+  setCur: (idx)=>{
+    const N = get().frames.length;
+    if (N===0) return;
+    const clamped = Math.max(0, Math.min(N-1, idx));
+    set({ cur: clamped });
+    // 현재 + 주변만 URL 보장
+    ensureObjectURLFor(clamped);
+    schedulePrefetch(clamped, 2);
   },
 
-  // ---- actions ----
-  setCur: (i) => set({ cur: i }),
+  setPlaying: (v)=> set({ isPlaying: v }),
 
-  prefetchAround: (i, k) => {
-    const { frames, imgCache } = get()
-    const tasks: Promise<any>[] = []
-    for (let d = -k; d <= k; d++) {
-      const j = i + d
-      if (j < 0 || j >= frames.length) continue
-      const url = frames[j].url
-      if (!imgCache.has(url)) {
-        tasks.push(
-          loadImage(url).then((im) => {
-            const m = new Map(get().imgCache)
-            m.set(url, im)
-            set({ imgCache: m })
-          }),
-        )
-      }
-    }
-    void Promise.allSettled(tasks)
-  },
+  openFrameDir: ()=>{
+    const input = document.createElement('input');
+    input.type = 'file';
+    // 폴더 업로드
+    
+    input.webkitdirectory = true;
+    // @ts-expect-error
+    input.directory = true;
+    // @ts-expect-error
+    input.mozdirectory = true;
+    // @ts-expect-error
+    input.msdirectory = true;
+    input.multiple = true;
+    input.accept = 'image/*';
 
-  getImage: async (url) => {
-    const { imgCache } = get()
-    const cached = imgCache.get(url)
-    if (cached) return cached
-    const im = await loadImage(url)
-    const m = new Map(get().imgCache)
-    m.set(url, im)
-    set({ imgCache: m })
-    return im
-  },
-
-  openFrameDir: () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.setAttribute('webkitdirectory', '')
-    input.setAttribute('directory', '')
-    input.multiple = true
     input.onchange = () => {
-      const files = Array.from(input.files || [])
-        .filter((f) => f.type.startsWith('image/'))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-      const frames: Frame[] = files.map((f, idx) => ({
-        i: idx + 1,
-        url: URL.createObjectURL(f),
-      }))
-      set({ frames, cur: 0 })
-    }
-    input.click()
+      const fileList = Array.from(input.files || []);
+      if (fileList.length === 0) return;
+
+      set({ isLoading: true, loadProgress: 0 });
+
+      // 이미지 파일만
+      const images = fileList.filter(f => f.type.startsWith('image/'));
+      // 상대경로 기준 숫자 인지 정렬
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      images.sort((a, b) => {
+        const pa = (a as any).webkitRelativePath || a.name;
+        const pb = (b as any).webkitRelativePath || b.name;
+        return collator.compare(pa, pb);
+      });
+
+      // URL은 만들지 않고 파일만 보관 (지연 생성)
+      const frames: Frame[] = images.map((f, idx) => ({ i: idx+1, file: f }));
+
+      // 기존 캐시/URL 풀 리셋
+      get().imgCache.clear();
+      for (const u of urlLRU.splice(0)) { try{ URL.revokeObjectURL(u) }catch{} }
+      urlOwner.clear();
+
+      // 세팅
+      set({ frames, cur: 0, isPlaying: false });
+
+      // 첫 프레임과 주변 몇 장만 즉시 URL 확보
+      ensureObjectURLFor(0);
+      schedulePrefetch(0, 3);
+
+      set({ isLoading: false, loadProgress: 1 });
+    };
+
+    input.click();
   },
 
-  openGT: () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.txt,.json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
-      if (!f) return
+  openGT: ()=>{
+    const input = document.createElement('input');
+    input.type='file'; input.accept='.txt,.json';
+    input.onchange = async ()=>{
+      const f = input.files?.[0]; if(!f) return;
+      const fd = new FormData();
+      fd.append('kind','gt'); fd.append('file', f);
+      const base = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8000';
+      const r = await fetch(base + '/annotations', { method:'POST', body:fd }).catch(()=>null);
+      if(!r || !r.ok){ alert('GT 업로드 실패'); return; }
+      const js = await r.json();
+      set({ gtAnnotationId: js.annotation_id });
+    };
+    input.click();
+  },
+
+  openPred: ()=>{
+    const input = document.createElement('input');
+    input.type='file'; input.accept='.txt,.json';
+    input.onchange = async ()=>{
+      const f = input.files?.[0]; if(!f) return;
+      const fd = new FormData();
+      fd.append('kind','pred'); fd.append('file', f);
+      const base = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8000';
+      const r = await fetch(base + '/annotations', { method:'POST', body:fd }).catch(()=>null);
+      if(!r || !r.ok){ alert('Pred 업로드 실패'); return; }
+      const js = await r.json();
+      set({ predAnnotationId: js.annotation_id });
+    };
+    input.click();
+  },
+
+  setGT: (id)=> set({ gtAnnotationId: id }),
+  setPred: (id)=> set({ predAnnotationId: id }),
+
+  setIou: (v)=> set({ iou: Math.max(0, Math.min(1, v)) }),
+  setConf: (v)=> set({ conf: Math.max(0, Math.min(1, v)) }),
+
+  getImage: async(url:string)=>{
+    const cache = get().imgCache;
+    const hit = cache.get(url);
+    if (hit) return hit;
+    const p = new Promise<HTMLImageElement>((resolve,reject)=>{
+      const img = new Image();
+      img.onload = ()=> { touchURL(url); resolve(img); };
+      img.onerror = reject;
+      img.src = url;
+      // modern 브라우저에서 디코드 힌트
+      // @ts-ignore
+      img.decoding = 'async';
+    });
+    cache.set(url, p);
+    return p;
+  },
+
+  prefetchAround: (center, radius=2)=>{
+    schedulePrefetch(center, radius);
+  },
+
+  fillCacheWindow: async(kind, f0, f1)=>{
+    const ann = kind==='gt' ? get().gtAnnotationId : get().predAnnotationId;
+    if(!ann) return;
+    const key = `${kind}:${ann}:${f0}-${f1}`;
+    if (inFlight.has(key)) return inFlight.get(key)!;
+    const p = (async()=>{
+      const data = await fetchTracksWindow(ann, f0, f1);
+      const target = (kind==='gt'? gtCache : prCache);
+      for (const tr of data.tracks || []) {
+        for (const fr of tr.frames || []) {
+          const k = `${ann}:${fr.f}`;
+          const list = target.get(k) || [];
+          if (!list.find(v => String(v.id)===String(tr.id))) {
+            const fb: FlatBox = { id: tr.id, bbox: fr.bbox.map(Number) as any, ...(fr.conf!=null?{conf:Number(fr.conf)}:{}) };
+            list.push(fb);
+            target.set(k, list);
+          }
+        }
+      }
+    })().finally(()=> inFlight.delete(key));
+    inFlight.set(key, p);
+    return p;
+  },
+
+  getPredBox: (frame, id, base)=>{
+    const ov = get().overrides.get(frame)?.get(id);
+    return ov ? ov : base;
+  },
+
+  applyOverrideWithHistory: (frame, id, next)=>{
+    const curMap = new Map(get().overrides.get(frame) || []);
+    const before = curMap.get(id);
+    curMap.set(id, { ...next });
+    const overrides = new Map(get().overrides);
+    overrides.set(frame, curMap);
+    set({
+      overrides,
+      overrideVersion: get().overrideVersion + 1,
+      undoStack: [...get().undoStack, { frame, id, before, after: next }],
+      redoStack: [],
+    });
+  },
+
+  // Array.at(-1) 미사용 (낮은 lib 대응)
+  undo: ()=>{
+    const us = get().undoStack;
+    const ent = us.length ? us[us.length - 1] : undefined;
+    if(!ent) return;
+    const u = us.slice(0, us.length - 1);
+    const r = [...get().redoStack, ent];
+    const map = new Map(get().overrides.get(ent.frame) || []);
+    if (ent.before) map.set(ent.id, ent.before);
+    else map.delete(ent.id);
+    const overrides = new Map(get().overrides); overrides.set(ent.frame, map);
+    set({ overrides, overrideVersion: get().overrideVersion + 1, undoStack: u, redoStack: r });
+  },
+
+  redo: ()=>{
+    const rs = get().redoStack;
+    const ent = rs.length ? rs[rs.length - 1] : undefined;
+    if(!ent) return;
+    const u = [...get().undoStack, ent];
+    const r = rs.slice(0, rs.length - 1);
+    const map = new Map(get().overrides.get(ent.frame) || []);
+    if (ent.after) map.set(ent.id, ent.after);
+    else map.delete(ent.id);
+    const overrides = new Map(get().overrides); overrides.set(ent.frame, map);
+    set({ overrides, overrideVersion: get().overrideVersion + 1, undoStack: u, redoStack: r });
+  },
+
+  resetFrame: (frame)=>{
+    const overrides = new Map(get().overrides);
+    overrides.delete(frame);
+    set({ overrides, overrideVersion: get().overrideVersion + 1 });
+  },
+
+  resetCurrentFrame: ()=>{
+    const frame = get().frames[get().cur];
+    if (frame) get().resetFrame(frame.i);
+  },
+
+  changeOverrideIdWithHistory: (frame, oldId, newId, geom)=>{
+    const curMap = new Map(get().overrides.get(frame) || []);
+    const before = curMap.get(oldId);
+    const newBox: Box = { id: newId, ...geom };
+    curMap.delete(oldId);
+    curMap.set(newId, newBox);
+    const overrides = new Map(get().overrides);
+    overrides.set(frame, curMap);
+    
+    // ID 변경을 히스토리에 기록 (oldId 삭제, newId 추가)
+    const undoStack = [
+      ...get().undoStack,
+      { frame, id: oldId, before, after: undefined },
+      { frame, id: newId, before: undefined, after: newBox }
+    ];
+    
+    set({
+      overrides,
+      overrideVersion: get().overrideVersion + 1,
+      undoStack,
+      redoStack: [],
+    });
+  },
+
+  exportModifiedPred: ()=>{
+    const frames = get().frames;
+    const overrides = get().overrides;
+    const predAnnId = get().predAnnotationId;
+    
+    if (!predAnnId) { alert('Pred 파일을 먼저 불러오세요'); return; }
+    if (frames.length === 0) { alert('프레임을 먼저 불러오세요'); return; }
+    
+    // 수정된 모든 박스를 MOT 형식으로 내보내기
+    const lines: string[] = [];
+    
+    for (const frame of frames) {
+      const frameOverrides = overrides.get(frame.i);
+      if (!frameOverrides || frameOverrides.size === 0) continue;
+      
+      for (const [boxId, box] of frameOverrides.entries()) {
+        const conf = box.conf ?? 1.0;
+        const line = `${frame.i},${boxId},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`;
+        lines.push(line);
+      }
+    }
+    
+    if (lines.length === 0) { alert('수정된 박스가 없습니다'); return; }
+    
+    const content = lines.join('\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `pred_modified_${new Date().getTime()}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  },
+
+  scanIdSwitches: async ()=>{
+    const gtId = get().gtAnnotationId;
+    const predId = get().predAnnotationId;
+    const frames = get().frames;
+    
+    if (!gtId || !predId) { alert('GT와 Pred를 모두 불러오세요'); return; }
+    if (frames.length === 0) { alert('프레임을 먼저 불러오세요'); return; }
+    
+    const idswSet = new Set<number>();
+    const iouThr = get().iou;
+    
+    // 각 프레임에서 ID 스위치 감지
+    for (const frame of frames) {
       try {
-        const ret = await uploadAnnotation('gt', f)
-        set({ gtAnnotationId: ret.annotation_id })
+        const gtBoxes = await fetchFrameBoxes(gtId, frame.i);
+        const predBoxes = await fetchFrameBoxes(predId, frame.i);
+        
+        if (gtBoxes.length === 0 || predBoxes.length === 0) continue;
+        
+        // 그리디 매칭 (간단한 버전)
+        const gtAssigned = new Map<number, number>(); // gt_idx -> pred_idx
+        const predUsed = new Set<number>();
+        
+        // IoU 기준 정렬
+        const pairs: {gtIdx:number; predIdx:number; iov:number}[] = [];
+        for (let gi = 0; gi < gtBoxes.length; gi++) {
+          for (let pi = 0; pi < predBoxes.length; pi++) {
+            const gBbox = gtBoxes[gi].bbox as [number,number,number,number];
+            const pBbox = predBoxes[pi].bbox as [number,number,number,number];
+            const [gx,gy,gw,gh] = gBbox;
+            const [px,py,pw,ph] = pBbox;
+            const x1 = Math.max(gx, px), y1 = Math.max(gy, py);
+            const x2 = Math.min(gx+gw, px+pw), y2 = Math.min(gy+gh, py+ph);
+            const iw = Math.max(0, x2-x1), ih = Math.max(0, y2-y1);
+            const inter = iw*ih;
+            const union = gw*gh + pw*ph - inter;
+            const iov = union > 0 ? inter / union : 0;
+            if (iov >= iouThr) {
+              pairs.push({gtIdx: gi, predIdx: pi, iov});
+            }
+          }
+        }
+        
+        pairs.sort((a,b)=> b.iov - a.iov);
+        for (const p of pairs) {
+          if (!gtAssigned.has(p.gtIdx) && !predUsed.has(p.predIdx)) {
+            gtAssigned.set(p.gtIdx, p.predIdx);
+            predUsed.add(p.predIdx);
+          }
+        }
+        
+        // ID 스위치 검사
+        for (const [gtIdx, predIdx] of gtAssigned) {
+          const gtId_val = Number(gtBoxes[gtIdx].id);
+          const predId_val = Number(predBoxes[predIdx].id);
+          if (gtId_val !== predId_val) {
+            idswSet.add(frame.i);
+            break; // 프레임당 한 번만 기록
+          }
+        }
       } catch (e) {
-        console.error('openGT failed', e)
-        alert('GT 업로드 실패')
+        console.warn(`IDSW 스캔 오류 (프레임 ${frame.i}):`, e);
       }
     }
-    input.click()
+    
+    const idswFrames = Array.from(idswSet).sort((a,b)=>a-b);
+    set({ idswFrames });
   },
+}));
 
-  openPred: () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.txt,.json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
-      if (!f) return
-      try {
-        const ret = await uploadAnnotation('pred', f)
-        set({ predAnnotationId: ret.annotation_id })
-      } catch (e) {
-        console.error('openPred failed', e)
-        alert('Pred 업로드 실패')
-      }
-    }
-    input.click()
-  },
-
-  getPredBox: (frame, id, base) => {
-    const o = get().overrides.get(frame)
-    if (!o) return base
-    const b = o.get(id)
-    return b ? b : base
-  },
-
-  applyOverrideWithHistory: (frame, id, box) =>
-    set((state) => {
-      const map = new Map(state.overrides)
-      const byF = new Map(map.get(frame) ?? new Map())
-      const prev = byF.get(id) ?? null
-
-      if (box) byF.set(id, box)
-      else byF.delete(id)
-
-      if (byF.size) map.set(frame, byF)
-      else map.delete(frame)
-
-      const undo = state.undoStack.slice()
-      undo.push({ type: 'edit', frame, id, prev, next: box })
-      return {
-        overrides: map,
-        overrideVersion: state.overrideVersion + 1,
-        undoStack: undo,
-        redoStack: [],
-      }
-    }),
-
-  changeOverrideIdWithHistory: (frame, oldId, newId, geom) =>
-    set((state) => {
-      if (oldId === newId) return state
-
-      const map = new Map(state.overrides)
-      const byF = new Map(map.get(frame) ?? new Map())
-
-      const current = byF.get(oldId) ?? { id: oldId, ...geom }
-      byF.delete(oldId)
-      byF.set(newId, { id: newId, ...geom })
-
-      if (byF.size) map.set(frame, byF)
-      else map.delete(frame)
-
-      const undo = state.undoStack.slice()
-      undo.push({ type: 'id-change', frame, oldId, newId, box: current })
-      return {
-        overrides: map,
-        overrideVersion: state.overrideVersion + 1,
-        undoStack: undo,
-        redoStack: [],
-      }
-    }),
-
-  resetCurrentFrame: () =>
-    set((state) => {
-      const frameKey = getCurrentFrameKey(state)
-      const newOverrides = new Map(state.overrides)
-      const snapshot = new Map(newOverrides.get(frameKey) ?? new Map())
-      if (newOverrides.has(frameKey)) newOverrides.delete(frameKey)
-
-      const undo = state.undoStack.slice()
-      undo.push({ type: 'frame-reset', frame: frameKey, snapshot })
-
-      return {
-        overrides: newOverrides,
-        overrideVersion: state.overrideVersion + 1,
-        undoStack: undo,
-        redoStack: [],
-      }
-    }),
-
-  undo: () =>
-    set((state) => {
-      const last = state.undoStack[state.undoStack.length - 1]
-      if (!last) return state
-
-      const map = new Map(state.overrides)
-      const redo = state.redoStack.slice()
-      const undo = state.undoStack.slice(0, -1)
-
-      if (last.type === 'edit') {
-        const byF = new Map(map.get(last.frame) ?? new Map())
-        if (last.prev) byF.set(last.id, last.prev)
-        else byF.delete(last.id)
-        if (byF.size) map.set(last.frame, byF)
-        else map.delete(last.frame)
-        redo.push(last)
-      } else if (last.type === 'frame-reset') {
-        if (last.snapshot.size > 0) map.set(last.frame, new Map(last.snapshot))
-        else map.delete(last.frame)
-        redo.push(last)
-      } else if (last.type === 'id-change') {
-        const byF = new Map(map.get(last.frame) ?? new Map())
-        byF.delete(last.newId)
-        byF.set(last.oldId, { ...last.box })
-        if (byF.size) map.set(last.frame, byF)
-        else map.delete(last.frame)
-        redo.push(last)
-      }
-
-      return {
-        overrides: map,
-        overrideVersion: state.overrideVersion + 1,
-        undoStack: undo,
-        redoStack: redo,
-      }
-    }),
-
-  redo: () =>
-    set((state) => {
-      const ent = state.redoStack[state.redoStack.length - 1]
-      if (!ent) return state
-
-      const map = new Map(state.overrides)
-      const redo = state.redoStack.slice(0, -1)
-      const undo = state.undoStack.slice()
-
-      if (ent.type === 'edit') {
-        const byF = new Map(map.get(ent.frame) ?? new Map())
-        if (ent.next) byF.set(ent.id, ent.next)
-        else byF.delete(ent.id)
-        if (byF.size) map.set(ent.frame, byF)
-        else map.delete(ent.frame)
-        undo.push(ent)
-      } else if (ent.type === 'frame-reset') {
-        map.delete(ent.frame)
-        undo.push(ent)
-      } else if (ent.type === 'id-change') {
-        const byF = new Map(map.get(ent.frame) ?? new Map())
-        byF.delete(ent.oldId)
-        byF.set(ent.newId, { id: ent.newId, x: ent.box.x, y: ent.box.y, w: ent.box.w, h: ent.box.h, conf: ent.box.conf })
-        if (byF.size) map.set(ent.frame, byF)
-        else map.delete(ent.frame)
-        undo.push(ent)
-      }
-
-      return {
-        overrides: map,
-        overrideVersion: state.overrideVersion + 1,
-        undoStack: undo,
-        redoStack: redo,
-      }
-    }),
-
-  exportModifiedPred: async () => {
-    const { overrides, predAnnotationId } = get()
-    if (!predAnnotationId) {
-      alert('Pred annotation이 아직 없습니다.')
-      return
-    }
-
-    const list: Array<{ frame: number; id: number; x: number; y: number; w: number; h: number; conf: number }> = []
-    for (const [f, byF] of overrides.entries()) {
-      for (const [id, b] of byF.entries()) {
-        list.push({
-          frame: f,
-          id,
-          x: Math.round(b.x),
-          y: Math.round(b.y),
-          w: Math.round(b.w),
-          h: Math.round(b.h),
-          conf: typeof b.conf === 'number' ? b.conf : 1.0,
-        })
-      }
-    }
-
-    if (list.length === 0) {
-      const url = `${import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'}/annotations/${predAnnotationId}/download`
-      window.open(url, '_blank')
-      return
-    }
-
-    const url = `${import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'}/export/merge`
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pred_annotation_id: predAnnotationId, overrides: list }),
-    })
-    if (!r.ok) {
-      const txt = await r.text().catch(() => String(r.status))
-      throw new Error(`export failed: ${txt}`)
-    }
-    const blob = await r.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `prediction_merged_full_${predAnnotationId}.txt`
-    a.click()
-  },
-}))
-
-export default useFrameStore
-export { useFrameStore }
-
-if (import.meta.env.DEV) {
-  // @ts-ignore
-  ;(window as any).useFrameStore = useFrameStore
-}
+export default useFrameStore;
+export { gtCache, prCache };

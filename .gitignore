@@ -1,0 +1,12 @@
+# node_modules 안 올리기
+node_modules/
+frontend/node_modules/
+
+# Python 캐시 파일 안 올리기
+__pycache__/
+*.pyc
+
+# Vite 캐시
+frontend/node_modules/.vite/
+
+appdata/annotations/
