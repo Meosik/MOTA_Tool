@@ -1,6 +1,7 @@
+// frontend/src/components/OverlayCanvas.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import useFrameStore, { Box, gtCache, prCache } from '../store/frameStore';
-import type { FlatBox } from '../lib/api';
+import useFrameStore, { Box } from '../store/frameStore';
+import { fetchFrameBoxes, type FlatBox } from '../lib/api';
 
 const COLORS = {
   gtStroke: 'rgba(80, 220, 120, 0.95)',
@@ -66,28 +67,21 @@ export default function OverlayCanvas(){
 
   const gtId           = useFrameStore(s => s.gtAnnotationId);
   const predId         = useFrameStore(s => s.predAnnotationId);
-  const fillCacheWindow = useFrameStore(s => s.fillCacheWindow);
   const getPredBox     = useFrameStore(s => s.getPredBox);
   const overrideVer    = useFrameStore(s => s.overrideVersion);
 
   const showGT         = useFrameStore(s => s.showGT);
   const showPred       = useFrameStore(s => s.showPred);
 
+  const changeId = useFrameStore(s => s.changeOverrideIdWithHistory);
+
   const rootRef = useRef<HTMLDivElement>(null)
   const cnvRef = useRef<HTMLCanvasElement>(null);
-  const [img, setImg] = useState<HTMLImageElement|ImageBitmap|null>(null);
-  const imgRef = useRef<HTMLImageElement|ImageBitmap|null>(null);
+  const [img, setImg] = useState<HTMLImageElement|null>(null);
   const fm = frames[cur] || null;
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
   const [predBase, setPredBase] = useState<FlatBox[]>([]);
-
-  const layoutRef = useRef<any>(null);
-  const gtBoxesRef = useRef<FlatBox[]>([]);
-  const predBaseRef = useRef<FlatBox[]>([]);
-  const overridesRef = useRef(useFrameStore.getState().overrides);
-  const activeIdRef = useRef<number|null>(null);
-  const ghostBoxRef = useRef<Box|null>(null);
 
   const [activeId, setActiveId] = useState<number|null>(null);
   const [dragMode, setDragMode] = useState<DragMode>('none');
@@ -99,8 +93,8 @@ export default function OverlayCanvas(){
   const layout = useMemo(()=>{
     const W = cnvRef.current?.clientWidth || 1280;
     const H = cnvRef.current?.clientHeight || 720;
-    const iw = img ? (((img as any).naturalWidth ?? (img as any).width) || 1) : 1;
-    const ih = img ? (((img as any).naturalHeight ?? (img as any).height) || 1) : 1;
+    const iw = img?.naturalWidth  || 1;
+    const ih = img?.naturalHeight || 1;
     const s = Math.min(W/iw, H/ih);
     const dw = iw * s, dh = ih * s;
     const ox = (W - dw)/2, oy = (H - dh)/2;
@@ -112,8 +106,8 @@ export default function OverlayCanvas(){
 
   useEffect(()=>{
     if (!fm) { setImg(null); return; }
-    if (!fm.url) { setImg(null); imgRef.current = null; return; }
-    getImage(fm.url).then(im => { setImg(im); imgRef.current = im; }).catch(()=>{ setImg(null); imgRef.current = null; });
+    if (!fm.url) { setImg(null); return; }
+    getImage(fm.url).then(setImg).catch(()=>setImg(null));
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
     setIdEdit(v=> ({...v, show:false}))
@@ -124,45 +118,23 @@ export default function OverlayCanvas(){
     let aborted = false;
     (async ()=>{
       if (gtId && fm) {
-        try {
-          const key = `${gtId}:${fm.i}`;
-          const cached = gtCache.get(key);
-          if (cached) { if (!aborted) setGtBoxes(cached); }
-          else {
-            // 캐시에 없으면 현재 프레임만 로드 (BottomHud의 prefetch에 의존)
-            await fillCacheWindow('gt', fm.i, fm.i);
-            const after = gtCache.get(key) || [];
-            if (!aborted) setGtBoxes(after);
-          }
-        } catch {
-          if(!aborted) setGtBoxes([]);
-        }
+        try { const bb = await fetchFrameBoxes(gtId, fm.i); if (!aborted) setGtBoxes(bb); }
+        catch { if(!aborted) setGtBoxes([]); }
       } else setGtBoxes([]);
     })();
     return ()=>{aborted = true;}
-  }, [gtId, fm?.i, fillCacheWindow]);
+  }, [gtId, fm?.i]);
 
   useEffect(()=>{
     let aborted = false;
     (async ()=>{
       if (predId && fm) {
-        try {
-          const key = `${predId}:${fm.i}`;
-          const cached = prCache.get(key);
-          if (cached) { if (!aborted) setPredBase(cached); }
-          else {
-            // 캐시에 없으면 현재 프레임만 로드 (BottomHud의 prefetch에 의존)
-            await fillCacheWindow('pred', fm.i, fm.i);
-            const after = prCache.get(key) || [];
-            if (!aborted) setPredBase(after);
-          }
-        } catch {
-          if(!aborted) setPredBase([]);
-        }
+        try { const bb = await fetchFrameBoxes(predId, fm.i); if (!aborted) setPredBase(bb); }
+        catch { if(!aborted) setPredBase([]); }
       } else setPredBase([]);
     })();
     return ()=>{aborted = true;}
-  }, [predId, fm?.i, fillCacheWindow]);
+  }, [predId, fm?.i]);
 
   useEffect(()=>{
     setActiveId(null);
@@ -171,12 +143,6 @@ export default function OverlayCanvas(){
     dragAnchor.current = null;
     setIdEdit(v=> ({...v, show:false}))
   }, [overrideVer]);
-
-  useEffect(()=>{ gtBoxesRef.current = gtBoxes }, [gtBoxes]);
-  useEffect(()=>{ predBaseRef.current = predBase }, [predBase]);
-  useEffect(()=>{ overridesRef.current = useFrameStore.getState().overrides }, [overrideVer]);
-  useEffect(()=>{ activeIdRef.current = activeId }, [activeId]);
-  useEffect(()=>{ ghostBoxRef.current = ghostBox }, [ghostBox]);
 
   const predBoxes: Box[] = useMemo(()=>{
     if (!fm) return [];
@@ -226,129 +192,77 @@ export default function OverlayCanvas(){
     return null;
   }
 
-  // single RAF draw loop (main-thread only)
+  // draw
   useEffect(()=>{
-    let raf = 0;
-    let mounted = true;
+    const cnv = cnvRef.current; if (!cnv) return;
+    const ctx = cnv.getContext('2d'); if (!ctx) return;
 
-    const loop = () => {
-      if (!mounted) return;
-      try {
-        const st = useFrameStore.getState();
-        const f = st.frames[st.cur];
-        const cnv = cnvRef.current;
-        if (f && cnv) {
-          const im = imgRef.current;
-          const L = layoutRef.current || layout;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = cnv.clientWidth, cssH = cnv.clientHeight;
+    if (cnv.width !== Math.floor(cssW*dpr) || cnv.height !== Math.floor(cssH*dpr)) {
+      cnv.width = Math.floor(cssW*dpr);
+      cnv.height = Math.floor(cssH*dpr);
+    }
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cssW,cssH);
 
-          const ctx = cnv.getContext('2d');
-          if (!ctx) return;
+    if (img) ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+    else { ctx.fillStyle='#f7f7f7'; ctx.fillRect(0,0,cssW,cssH); }
 
-          const cssW = cnv.clientWidth, cssH = cnv.clientHeight;
-          const dpr = window.devicePixelRatio || 1;
-          if (cnv.width !== Math.floor(cssW*dpr) || cnv.height !== Math.floor(cssH*dpr)) {
-            cnv.width = Math.floor(cssW*dpr);
-            cnv.height = Math.floor(cssH*dpr);
-          }
-          ctx.setTransform(dpr,0,0,dpr,0,0);
-          ctx.clearRect(0,0,cssW,cssH);
-          
-          // drawImage 호출 시 에러 처리 (ImageBitmap이 detached된 경우)
-          if (im) {
-            try {
-              ctx.drawImage(im as any, L.ox, L.oy, L.dw, L.dh);
-            } catch (err) {
-              console.warn('drawImage failed (detached ImageBitmap?), clearing cache:', err);
-              // ImageBitmap이 detached되었다면 캐시에서 제거
-              if (f.url) {
-                try {
-                  (useFrameStore.getState() as any).imgCache?.delete(f.url);
-                } catch {}
-              }
-              ctx.fillStyle = '#f7f7f7';
-              ctx.fillRect(0,0,cssW,cssH);
-            }
-          } else { 
-            ctx.fillStyle = '#f7f7f7'; 
-            ctx.fillRect(0,0,cssW,cssH); 
-          }
+    // GT
+    if (showGT && gtBoxes.length){
+      ctx.lineWidth = LINE_W;
+      ctx.strokeStyle = COLORS.gtStroke;
+      ctx.fillStyle   = COLORS.gtFill;
 
-          const keyG = `${gtId}:${f.i}`;
-          const keyP = `${predId}:${f.i}`;
-          const gboxes = gtCache.get(keyG) || gtBoxesRef.current || [];
-          const pboxes = prCache.get(keyP) || predBaseRef.current || [];
+      for (const g of gtBoxes){
+        const [x,y,w,h] = g.bbox as [number,number,number,number];
+        const p = toCanvas({x,y});
+        const cw = w*layout.s, ch = h*layout.s;
 
-          if (showGT && gboxes.length) {
-            ctx.lineWidth = LINE_W; ctx.strokeStyle = COLORS.gtStroke; ctx.fillStyle = COLORS.gtFill;
-            ctx.font = '12px ui-sans-serif';
-            for (let gi=0; gi<gboxes.length; gi++){
-              const g = gboxes[gi];
-              const bb = g.bbox as [number,number,number,number];
-              const px = L.ox + bb[0]*L.s;
-              const py = L.oy + bb[1]*L.s;
-              const cw = bb[2]*L.s, ch = bb[3]*L.s;
-              ctx.fillRect(px, py, cw, ch);
-              ctx.strokeRect(px, py, cw, ch);
-              
-              const text = String(g.id);
-              const tw = ctx.measureText(text).width;
-              const lx = px - 1, ly = Math.max(0, py - 18);
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(lx, ly, tw + 8, 16);
-              ctx.fillStyle = 'rgba(80, 220, 120, 0.95)';
-              ctx.fillText(text, lx + 4, ly + 12);
-            }
-          }
+        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke();
+        drawIdLabel(ctx, String(g.id), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 0.95)');
 
-          if (showPred && pboxes.length) {
-            ctx.lineWidth = LINE_W; ctx.strokeStyle = COLORS.predStroke; ctx.fillStyle = COLORS.predFill;
-            ctx.font = '12px ui-sans-serif';
-            for (let pi=0; pi<pboxes.length; pi++){
-              const p = pboxes[pi];
-              const bb = p.bbox.map(Number) as [number,number,number,number];
-              const bid = Number(p.id);
-              const ovmap = overridesRef.current?.get(f.i);
-              let px, py, cw, ch;
-              
-              if (ovmap?.has(bid)) {
-                const ov = ovmap.get(bid)!;
-                px = L.ox + ov.x*L.s;
-                py = L.oy + ov.y*L.s;
-                cw = ov.w*L.s; ch = ov.h*L.s;
-              } else {
-                px = L.ox + bb[0]*L.s;
-                py = L.oy + bb[1]*L.s;
-                cw = bb[2]*L.s; ch = bb[3]*L.s;
-              }
-              
-              ctx.fillRect(px, py, cw, ch);
-              ctx.strokeRect(px, py, cw, ch);
-              
-              const text = String(bid);
-              const tw = ctx.measureText(text).width;
-              const lx = px - 1, ly = Math.max(0, py - 18);
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(lx, ly, tw + 8, 16);
-              ctx.fillStyle = 'rgba(255, 140, 0, 0.95)';
-              ctx.fillText(text, lx + 4, ly + 12);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('overlay draw error', err);
+        ctx.strokeStyle = COLORS.gtStroke;
+        ctx.fillStyle   = COLORS.gtFill;
       }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => { mounted = false; cancelAnimationFrame(raf); };
-  }, [gtId, predId, showGT, showPred, fm?.url]);
+    }
 
-  useEffect(()=>{ layoutRef.current = layout; }, [layout]);
+    // Pred
+    if (showPred && predBoxes.length){
+      for (const b of predBoxes){
+        const isActive = activeId === b.id && ghostBox
+        const rb = isActive ? ghostBox! : b
+        const p = toCanvas({x:rb.x, y:rb.y})
+        const cw = rb.w*layout.s, ch = rb.h*layout.s
 
-  const getCanvasPt = (e:React.MouseEvent<HTMLCanvasElement>): Vec => {
+        ctx.lineWidth = LINE_W
+        ctx.strokeStyle = COLORS.predStroke
+        ctx.fillStyle   = COLORS.predFill
+        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke()
+
+        drawIdLabel(ctx, String(rb.id), p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 0.95)');
+
+        ctx.fillStyle = COLORS.predStroke
+        const handles = [
+          {x:p.x, y:p.y},
+          {x:p.x+cw, y:p.y},
+          {x:p.x, y:p.y+ch},
+          {x:p.x+cw, y:p.y+ch},
+        ]
+        for (const h of handles){
+          ctx.beginPath()
+          ctx.rect(h.x - HANDLE_SIZE/2, h.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE)
+          ctx.fill()
+        }
+      }
+    }
+  }, [img, layout.W, layout.H, layout.ox, layout.oy, layout.s, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox])
+
+  function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
+  }
 
   const onMouseDown = (e:React.MouseEvent<HTMLCanvasElement>) => {
     if (!showPred) return;
@@ -367,6 +281,7 @@ export default function OverlayCanvas(){
     setIdEdit(v=>({...v, show:false}))
   };
 
+  // ID 더블클릭 편집
   const onDoubleClick = (e:React.MouseEvent<HTMLCanvasElement>) => {
     const frame = frames[cur]; if (!frame || !showPred) return
     const ptC = getCanvasPt(e)
@@ -388,19 +303,20 @@ export default function OverlayCanvas(){
       left, top,
       geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf },
     })
-  };
+  }
 
   const commitIdEdit = () => {
     if (!idEdit.show) return
     const newId = Number(idEdit.value)
     if (!Number.isInteger(newId) || newId <= 0) { setIdEdit(v=>({...v, show:false})); return }
     if (newId === idEdit.targetId) { setIdEdit(v=>({...v, show:false})); return }
+    // 히스토리 포함 ID 변경
     useFrameStore.getState().changeOverrideIdWithHistory(
       idEdit.frame, idEdit.targetId, newId, idEdit.geom
     )
     setActiveId(newId)
     setIdEdit(v=>({...v, show:false}))
-  };
+  }
 
   const updateHoverCursor = (ptC:Vec) => {
     const el = cnvRef.current; if (!el) return;
