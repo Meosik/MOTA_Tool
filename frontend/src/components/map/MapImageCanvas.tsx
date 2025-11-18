@@ -140,8 +140,11 @@ export default function MapImageCanvas({
       cnv.height = Math.floor(cssH*dpr);
     }
     ctx.setTransform(dpr,0,0,dpr,0,0);
+    
+    // Clear canvas FIRST
     ctx.clearRect(0,0,cssW,cssH);
 
+    // Draw image
     if (img) {
       ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
       console.log('MapImageCanvas: Drew image', { layout });
@@ -150,11 +153,11 @@ export default function MapImageCanvas({
       ctx.fillRect(0,0,cssW,cssH); 
     }
 
-    // Draw GT boxes
-    if (gt.length){
-      ctx.lineWidth = LINE_W;
-      ctx.strokeStyle = COLORS.gtStroke;
-      ctx.fillStyle   = COLORS.gtFill;
+    // Draw GT boxes (ON TOP of image)
+    if (gt.length > 0){
+      ctx.lineWidth = 3;  // Thicker for visibility
+      ctx.strokeStyle = 'rgba(80, 220, 120, 1.0)';  // Fully opaque
+      ctx.fillStyle   = 'rgba(80, 220, 120, 0.25)'; // Semi-transparent fill
 
       for (const g of gt){
         const [x,y,w,h] = g.bbox;
@@ -165,18 +168,16 @@ export default function MapImageCanvas({
         ctx.rect(p.x, p.y, cw, ch); 
         ctx.fill(); 
         ctx.stroke();
-        drawIdLabel(ctx, String(g.id || g.category || 'GT'), p.x, Math.max(12, p.y - 4), COLORS.gtStroke);
-
-        ctx.strokeStyle = COLORS.gtStroke;
-        ctx.fillStyle   = COLORS.gtFill;
+        drawIdLabel(ctx, String(g.id || g.category || 'GT'), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 1.0)');
       }
+      console.log('MapImageCanvas: Drew', gt.length, 'GT boxes (green)');
     }
 
-    // Draw Pred boxes
-    if (pred.length){
-      ctx.lineWidth = LINE_W;
-      ctx.strokeStyle = COLORS.predStroke;
-      ctx.fillStyle   = COLORS.predFill;
+    // Draw Pred boxes (ON TOP of image)
+    if (pred.length > 0){
+      ctx.lineWidth = 3;  // Thicker for visibility
+      ctx.strokeStyle = 'rgba(255, 140, 0, 1.0)';  // Fully opaque
+      ctx.fillStyle   = 'rgba(255, 140, 0, 0.25)'; // Semi-transparent fill
 
       for (const b of pred){
         const [x,y,w,h] = b.bbox;
@@ -188,11 +189,9 @@ export default function MapImageCanvas({
         ctx.fill(); 
         ctx.stroke();
         const label = b.conf !== undefined ? `${b.id || b.category || ''} ${b.conf.toFixed(2)}` : String(b.id || b.category || 'Pred');
-        drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), COLORS.predStroke);
-
-        ctx.strokeStyle = COLORS.predStroke;
-        ctx.fillStyle   = COLORS.predFill;
+        drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 1.0)');
       }
+      console.log('MapImageCanvas: Drew', pred.length, 'Pred boxes (orange)');
     }
 
     console.log('MapImageCanvas: Finished drawing', { gtCount: gt.length, predCount: pred.length });

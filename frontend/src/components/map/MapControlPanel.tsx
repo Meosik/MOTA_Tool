@@ -13,11 +13,30 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const [conf, setConf] = useState(0.0)
   const [iou, setIou] = useState(0.5)
   
+  // Get current image and annotations from store
+  const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
+  const currentImage = images[currentImageIndex] || null;
+  
   // Use gtId/predId if provided, fallback to projectId/annotationId
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
   const { data, isLoading, error } = useMapMetrics(effectiveGtId, effectivePredId!, conf, iou)
+  
+  // Calculate per-image statistics
+  const imageStats = React.useMemo(() => {
+    if (!currentImage) return null;
+    
+    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id && (a.conf === undefined || a.conf >= 1.0));
+    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id && (a.conf || 0) >= conf);
+    
+    return {
+      gtCount: gtForImage.length,
+      predCount: predForImage.length,
+      imageName: currentImage.name,
+      imageId: currentImage.id,
+    };
+  }, [currentImage, gtAnnotations, predAnnotations, conf]);
 
   // Slider adjustment utilities (matching MOTA RightPanel)
   const stepSmall = 0.01
@@ -92,9 +111,26 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
       </div>
 
-      {/* Metrics Display */}
+      {/* Current Image Statistics */}
+      {imageStats && (
+        <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50">
+          <div className="text-sm font-semibold">Current Image</div>
+          <div className="text-xs text-neutral-700 truncate" title={imageStats.imageName}>
+            {imageStats.imageName}
+          </div>
+          <div className="text-xs text-neutral-600 font-mono">
+            ID: {imageStats.imageId}
+          </div>
+          <div className="flex justify-between text-xs mt-1">
+            <span className="text-green-600">GT: {imageStats.gtCount}</span>
+            <span className="text-orange-600">Pred: {imageStats.predCount}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Overall Dataset Metrics */}
       <div className="space-y-1">
-        <div className="text-sm font-semibold">Metrics</div>
+        <div className="text-sm font-semibold">Overall Dataset</div>
         
         {error && (
           <div className="text-xs text-red-500">Error loading metrics</div>
@@ -110,7 +146,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             {data.class_aps && typeof data.class_aps === 'object' && Object.keys(data.class_aps).length > 0 && (
               <div className="mt-3 space-y-1">
                 <div className="text-sm font-semibold">Per-Class AP</div>
-                <div className="max-h-64 overflow-y-auto space-y-1">
+                <div className="max-h-48 overflow-y-auto space-y-1">
                   {Object.entries(data.class_aps).map(([cls, ap]) => (
                     <div key={cls} className="flex justify-between items-center text-xs">
                       <span className="text-neutral-700">{cls}</span>
