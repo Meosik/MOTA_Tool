@@ -33,3 +33,43 @@ export async function fetchFrameBoxes(annotationId: string, f: number){
   }
   return out;
 }
+
+// mAP calculation types and functions
+export interface Category {
+  id: number;
+  name: string;
+  supercategory?: string;
+}
+
+export interface BBoxAnnotation {
+  bbox: number[];  // [x, y, width, height]
+  category_id: number;
+  score?: number;
+  image_id?: number;
+}
+
+export interface MapMetrics {
+  mean_ap: number;
+  class_aps: Record<number, number>;
+  iou_threshold: number;
+  confidence_threshold: number;
+  num_classes: number;
+}
+
+export interface MapCalculateRequest {
+  gt_annotations: BBoxAnnotation[];
+  pred_annotations: BBoxAnnotation[];
+  categories: Record<number, Category>;
+  iou_threshold: number;
+  confidence_threshold: number;
+}
+
+export async function calculateMap(request: MapCalculateRequest): Promise<MapMetrics> {
+  const r = await fetch(`${API_BASE}/api/map/calculate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}

@@ -1,9 +1,11 @@
 // frontend/src/components/TopBar.tsx
 import { useFrameStore } from '../store/frameStore'
-import { FolderOpen, Upload, Download, RotateCcw, RotateCw, Eraser } from 'lucide-react'
+import useMapStore from '../store/mapStore'
+import { FolderOpen, Upload, Download, RotateCcw, RotateCw, Eraser, Activity, Target } from 'lucide-react'
 
 export default function TopBar(){
   const { openFrameDir, openGT, openPred, exportModifiedPred, undo, redo, resetCurrentFrame } = useFrameStore()
+  const { isMapMode, setMapMode } = useMapStore()
 
   return (
     <div className="h-12 flex items-center gap-2 px-3 border-b bg-white text-sm">
@@ -17,6 +19,30 @@ export default function TopBar(){
       <button onClick={openPred} className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
         <Upload size={16}/> Pred 불러오기
       </button>
+
+      {/* Mode Toggle */}
+      <div className="flex items-center gap-1 ml-4 border-l pl-4">
+        <button
+          onClick={() => setMapMode(false)}
+          className={`px-3 py-1.5 rounded inline-flex items-center gap-2 transition-colors ${
+            !isMapMode 
+              ? 'bg-blue-100 text-blue-700 border border-blue-300' 
+              : 'border hover:bg-gray-50'
+          }`}
+        >
+          <Activity size={16}/> MOTA Mode
+        </button>
+        <button
+          onClick={() => setMapMode(true)}
+          className={`px-3 py-1.5 rounded inline-flex items-center gap-2 transition-colors ${
+            isMapMode 
+              ? 'bg-green-100 text-green-700 border border-green-300' 
+              : 'border hover:bg-gray-50'
+          }`}
+        >
+          <Target size={16}/> mAP Mode
+        </button>
+      </div>
 
       <div className="flex-1" />
 

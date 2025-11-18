@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import useFrameStore from '../store/frameStore'
+import useMapStore from '../store/mapStore'
 import { PreviewWS } from '../lib/ws'
+import MapMetricsPanel from './MapMetricsPanel'
 
 export default function RightPanel() {
+  const isMapMode = useMapStore(s => s.isMapMode)
   const {
     gtAnnotationId,
     predAnnotationId,
@@ -58,10 +61,15 @@ export default function RightPanel() {
 
   return (
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
-      <div className="text-sm text-neutral-500">WS: <span className="font-mono">{wsState}</span></div>
+      {/* Show Map Metrics Panel in mAP mode */}
+      {isMapMode ? (
+        <MapMetricsPanel />
+      ) : (
+        <>
+          <div className="text-sm text-neutral-500">WS: <span className="font-mono">{wsState}</span></div>
 
-      {/* IoU */}
-      <div className="space-y-2">
+          {/* IoU */}
+          <div className="space-y-2">
         <div className="text-sm font-semibold">IoU Threshold</div>
         <div className="flex items-center gap-2">
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={()=>adjustIou(-stepLarge)} title="IoU -0.05">
@@ -121,6 +129,15 @@ export default function RightPanel() {
         </div>
         {detail.error && <div className="text-xs text-red-500 break-words">{detail.error}</div>}
       </div>
+        </>
+      )}
+
+      {/* Common thresholds section (always shown) */}
+      {!isMapMode && (
+        <div className="mt-auto pt-4 border-t border-neutral-200">
+          <div className="text-xs text-neutral-400">Threshold controls available in both modes</div>
+        </div>
+      )}
     </aside>
   )
 }
