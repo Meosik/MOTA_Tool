@@ -2,13 +2,25 @@ import { create } from 'zustand';
 import type { Annotation } from '../types/annotation';
 import { API_BASE } from '../lib/api';
 
+export type MapImage = { id: number; name: string; file: File; url?: string };
+
 interface MapState {
+  // Image storage (like MOTA's frames)
+  images: MapImage[];
+  currentImageIndex: number;
+  
   gtAnnotations: Annotation[];
   predAnnotations: Annotation[];
   undoStack: Annotation[][];
   redoStack: Annotation[][];
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
   historyIndex: number;
+  
+  setImages: (images: MapImage[]) => void;
+  setCurrentImageIndex: (index: number) => void;
+  getCurrentImage: () => MapImage | null;
+  getImageUrl: (index: number) => string | null;
+  
   setGT: (anns: Annotation[]) => void;
   setPred: (anns: Annotation[]) => void;
   updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => void;
@@ -17,19 +29,61 @@ interface MapState {
   canUndo: () => boolean;
   canRedo: () => boolean;
   reset: () => void;
-  openMapFolder: (cb?: (annotationId: string) => void) => void;
+  openMapFolder: (cb?: (folderId: string) => void) => void;
   openMapGT: (cb?: (annotationId: string) => void) => void;
   openMapPred: (cb?: (annotationId: string) => void) => void;
   exportMapPred: () => void;
 }
 
+// ObjectURL management (similar to frameStore)
+const urlCache = new Map<number, string>();
+
+function getOrCreateImageUrl(image: MapImage, index: number): string {
+  if (urlCache.has(index)) {
+    return urlCache.get(index)!;
+  }
+  const url = URL.createObjectURL(image.file);
+  urlCache.set(index, url);
+  return url;
+}
+
+function clearUrlCache() {
+  urlCache.forEach(url => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  });
+  urlCache.clear();
+}
+
 export const useMapStore = create<MapState>((set, get) => ({
+  images: [],
+  currentImageIndex: 0,
   gtAnnotations: [],
   predAnnotations: [],
   undoStack: [],
   redoStack: [],
   editHistory: [],
   historyIndex: -1,
+  
+  setImages: (images) => {
+    clearUrlCache();
+    set({ images, currentImageIndex: 0 });
+  },
+  
+  setCurrentImageIndex: (index) => set({ currentImageIndex: index }),
+  
+  getCurrentImage: () => {
+    const state = get();
+    return state.images[state.currentImageIndex] || null;
+  },
+  
+  getImageUrl: (index) => {
+    const state = get();
+    const image = state.images[index];
+    if (!image) return null;
+    return getOrCreateImageUrl(image, index);
+  },
   
   setGT: (anns) => set(state => {
     const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
@@ -120,7 +174,7 @@ export const useMapStore = create<MapState>((set, get) => ({
       redoStack: [],
     };
   }),
-  openMapFolder: (cb?: (annotationId: string) => void) => {
+  openMapFolder: (cb?: (folderId: string) => void) => {
     const input = document.createElement('input');
     input.type = 'file';
     // 폴더 업로드 속성 (크로스브라우저)
@@ -133,52 +187,45 @@ export const useMapStore = create<MapState>((set, get) => ({
     input.msdirectory = true;
     input.multiple = true;
     input.accept = 'image/*';
-    input.onchange = async (e: any) => {
+    input.onchange = (e: any) => {
       const fileList = Array.from(input.files || []) as File[];
       if (fileList.length === 0) return;
       
       // 이미지 파일만 필터 (type이 없는 경우 확장자로 판단)
       const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
-      const images = fileList.filter(f => {
+      const imageFiles = fileList.filter(f => {
         if (f.type && f.type.startsWith('image/')) return true;
         // fallback: check file extension
         const ext = f.name.toLowerCase().slice(f.name.lastIndexOf('.'));
         return imageExtensions.includes(ext);
       });
       
-      if (images.length === 0) {
+      if (imageFiles.length === 0) {
         alert('이미지 파일이 없습니다.');
         return;
       }
       
       // 상대경로 기준 숫자 인지 정렬
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      images.sort((a, b) => {
+      imageFiles.sort((a, b) => {
         const pa = (a as any).webkitRelativePath || a.name;
         const pb = (b as any).webkitRelativePath || b.name;
         return collator.compare(pa, pb);
       });
       
-      const form = new FormData();
-      images.forEach((file) => {
-        // Use just the filename, not the full path
-        const filename = file.name;
-        form.append('images', file, filename);
-      });
+      // Store images in memory (like MOTA mode)
+      const mapImages: MapImage[] = imageFiles.map((file, idx) => ({
+        id: idx + 1,
+        name: file.name,
+        file: file,
+      }));
       
-      try {
-        const res = await fetch(`${API_BASE}/images/folder`, { method: 'POST', body: form });
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`업로드 실패: ${res.status} - ${errorText}`);
-        }
-        const data = await res.json();
-        alert('이미지 폴더 업로드 성공: ' + (data.folder_id || '성공'));
-        if (cb && data.folder_id) cb(data.folder_id);
-      } catch (err) {
-        console.error('Image folder upload error:', err);
-        alert('이미지 폴더 업로드 실패: ' + err);
-      }
+      get().setImages(mapImages);
+      
+      // Generate a pseudo folder ID for compatibility
+      const folderId = `local_${Date.now()}`;
+      alert(`이미지 폴더 로드 성공: ${imageFiles.length}개 이미지`);
+      if (cb) cb(folderId);
     };
     input.click();
   },
