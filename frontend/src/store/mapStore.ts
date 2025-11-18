@@ -134,10 +134,23 @@ export const useMapStore = create<MapState>((set, get) => ({
     input.multiple = true;
     input.accept = 'image/*';
     input.onchange = async (e: any) => {
-      const fileList = Array.from(input.files || []);
+      const fileList = Array.from(input.files || []) as File[];
       if (fileList.length === 0) return;
-      // 이미지 파일만 필터
-      const images = fileList.filter(f => f.type.startsWith('image/'));
+      
+      // 이미지 파일만 필터 (type이 없는 경우 확장자로 판단)
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+      const images = fileList.filter(f => {
+        if (f.type && f.type.startsWith('image/')) return true;
+        // fallback: check file extension
+        const ext = f.name.toLowerCase().slice(f.name.lastIndexOf('.'));
+        return imageExtensions.includes(ext);
+      });
+      
+      if (images.length === 0) {
+        alert('이미지 파일이 없습니다.');
+        return;
+      }
+      
       // 상대경로 기준 숫자 인지 정렬
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
       images.sort((a, b) => {
@@ -145,17 +158,25 @@ export const useMapStore = create<MapState>((set, get) => ({
         const pb = (b as any).webkitRelativePath || b.name;
         return collator.compare(pa, pb);
       });
+      
       const form = new FormData();
       images.forEach((file) => {
-        form.append('images', file, (file as any).webkitRelativePath || file.name);
+        // Use just the filename, not the full path
+        const filename = file.name;
+        form.append('images', file, filename);
       });
+      
       try {
         const res = await fetch(`${API_BASE}/images/folder`, { method: 'POST', body: form });
-        if (!res.ok) throw new Error('업로드 실패');
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`업로드 실패: ${res.status} - ${errorText}`);
+        }
         const data = await res.json();
         alert('이미지 폴더 업로드 성공: ' + (data.folder_id || '성공'));
         if (cb && data.folder_id) cb(data.folder_id);
       } catch (err) {
+        console.error('Image folder upload error:', err);
         alert('이미지 폴더 업로드 실패: ' + err);
       }
     };
