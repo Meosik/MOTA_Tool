@@ -1,6 +1,8 @@
 // frontend/src/components/OverlayCanvas.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import useFrameStore, { Box } from '../store/frameStore';
+import useFrameStore from '../store/frameStore';
+import type { Box } from '../types/annotation';
+import { iouRect } from '../utils/matching';
 import { fetchFrameBoxes, type FlatBox } from '../lib/api';
 
 const COLORS = {
@@ -17,15 +19,7 @@ type Vec = { x: number; y: number };
 type DragMode = 'none' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se';
 
 function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v)); }
-function iou(a:[number,number,number,number], b:[number,number,number,number]){
-  const [ax,ay,aw,ah] = a, [bx,by,bw,bh] = b;
-  const x1 = Math.max(ax, bx), y1 = Math.max(ay, by);
-  const x2 = Math.min(ax+aw, bx+bw), y2 = Math.min(ay+ah, by+bh);
-  const iw = Math.max(0, x2-x1), ih = Math.max(0, y2-y1);
-  const inter = iw*ih;
-  const union = aw*ah + bw*bh - inter;
-  return union>0 ? inter/union : 0;
-}
+
 function rectContains(x:number, y:number, r:{x:number;y:number;w:number;h:number}) {
   return x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h;
 }
@@ -150,13 +144,13 @@ export default function OverlayCanvas(){
     for (const p of predBase) {
       const [x,y,w,h] = p.bbox.map(Number) as [number,number,number,number];
       const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
-      const b = getPredBox(fm.i, base.id, base);
+      const b = getPredBox(fm.i, Number(base.id), base);
       if ((b.conf ?? 1) < confThr) continue;
       if (iouThr > 0 && gtBoxes.length > 0) {
         let maxI = 0;
         for (const g of gtBoxes) {
           const gbb = g.bbox as [number,number,number,number];
-          const curI = iou([b.x,b.y,b.w,b.h], gbb);
+          const curI = iouRect(b, { x: gbb[0], y: gbb[1], w: gbb[2], h: gbb[3], id: -1 });
           if (curI > maxI) maxI = curI;
           if (maxI >= iouThr) break;
         }
@@ -272,7 +266,7 @@ export default function OverlayCanvas(){
 
     const handle = hitWhichHandle(ptC, hit);
     const mode: DragMode = handle !== 'none' ? handle : 'move';
-    setActiveId(hit.id);
+    setActiveId(Number(hit.id));
     setDragMode(mode);
 
     const ptI = fromCanvas(ptC);
@@ -288,7 +282,7 @@ export default function OverlayCanvas(){
     const hit = hitPredBox(ptC)
     if (!hit) return
 
-    setActiveId(hit.id)
+    setActiveId(Number(hit.id))
     setDragMode('none'); setGhostBox(null); dragAnchor.current = null
 
     const p = toCanvas({x: hit.x, y: hit.y})
@@ -298,7 +292,7 @@ export default function OverlayCanvas(){
     setIdEdit({
       show: true,
       frame: frame.i,
-      targetId: hit.id,
+      targetId: Number(hit.id),
       value: String(hit.id),
       left, top,
       geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf },

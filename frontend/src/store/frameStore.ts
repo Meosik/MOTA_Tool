@@ -1,9 +1,10 @@
 // frontend/src/store/frameStore.ts
 import { create } from 'zustand';
 import { fetchFrameBoxes, fetchTracksWindow, type FlatBox } from '../lib/api';
+import type { Box } from '../types/annotation';
 
 export type Frame = { i:number; url?:string; file?:File };
-export type Box = { id:number; x:number; y:number; w:number; h:number; conf?:number };
+// Box 타입은 공통 타입 사용 (src/types/annotation)
 
 type EditEntry = { frame:number; id:number; before?:Box; after?:Box };
 

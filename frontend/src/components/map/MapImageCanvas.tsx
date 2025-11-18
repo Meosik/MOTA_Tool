@@ -1,9 +1,10 @@
 import { useImageAnnotations } from '../../hooks/mapApi';
+import type { Annotation } from '../../types/annotation';
 import React from 'react';
 
-export default function MapImageCanvas({ imageId }: { imageId: number | null }) {
-  const { data, isLoading, error } = useImageAnnotations(imageId!);
-  if (!imageId) return <div className="flex-1 flex items-center justify-center">이미지를 선택하세요</div>
+export default function MapImageCanvas({ annotationId }: { annotationId: string | null }) {
+  const { data, isLoading, error } = useImageAnnotations(annotationId!);
+  if (!annotationId) return <div className="flex-1 flex items-center justify-center">이미지를 선택하세요</div>
   if (isLoading) return <div className="flex-1 flex items-center justify-center text-gray-400">로딩중…</div>
   if (error) return <div className="flex-1 text-red-500">{String(error)}</div>
 
@@ -21,7 +22,7 @@ export default function MapImageCanvas({ imageId }: { imageId: number | null }) 
             width: '100%', height: '100%',
             pointerEvents: 'none'
           }}>
-          {[...gt, ...pred].map((ann: any, idx: number) =>
+          {[...gt, ...pred].map((ann: Annotation, idx: number) =>
             <rect
               key={ann.id || idx}
               x={ann.bbox[0]} y={ann.bbox[1]}

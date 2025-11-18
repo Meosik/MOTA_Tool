@@ -1,4 +1,4 @@
-export type Box = { x:number; y:number; w:number; h:number; id:number|string }
+import type { Box } from '../types/annotation';
 
 export function iouRect(a: Box, b: Box){
   const ax2 = a.x + a.w, ay2 = a.y + a.h
