@@ -1,22 +1,35 @@
-// frontend/src/components/TopBar.tsx
 import useFrameStore from '../store/frameStore'
 import { FolderOpen, Upload, Download, RotateCcw, RotateCw, Eraser } from 'lucide-react'
+import { useMode } from '../context/ModeContext'
 
-export default function TopBar(){
+export default function TopBar() {
   const { openFrameDir, openGT, openPred, exportModifiedPred, undo, redo, resetCurrentFrame } = useFrameStore()
+  const { mode, setMode } = useMode()
 
   return (
     <div className="h-12 flex items-center gap-2 px-3 border-b bg-white text-sm">
-      {/* 좌측: 기존 3버튼 유지 */}
-      <button onClick={openFrameDir} className="px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 inline-flex items-center gap-2">
-        <FolderOpen size={16}/> 프레임 폴더 열기
-      </button>
-      <button onClick={openGT} className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
-        <Upload size={16}/> GT 불러오기
-      </button>
-      <button onClick={openPred} className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
-        <Upload size={16}/> Pred 불러오기
-      </button>
+      {/* 좌측: 모드 전환 드롭다운 + 기존 3버튼 */}
+      <div className="flex items-center gap-2">
+        <select
+          aria-label="모드 전환"
+          value={mode}
+          onChange={e => setMode(e.target.value as 'MOTA' | 'MAP')}
+          className="px-2 py-1.5 rounded border bg-white text-brand-700 font-bold"
+          style={{ minWidth: 78 }}
+        >
+          <option value="MOTA">MOTA</option>
+          <option value="MAP">MAP</option>
+        </select>
+        <button onClick={openFrameDir} className="px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 inline-flex items-center gap-2">
+          <FolderOpen size={16}/> 프레임 폴더 열기
+        </button>
+        <button onClick={openGT} className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
+          <Upload size={16}/> GT 불러오기
+        </button>
+        <button onClick={openPred} className="px-3 py-1.5 rounded border inline-flex items-center gap-2">
+          <Upload size={16}/> Pred 불러오기
+        </button>
+      </div>
 
       <div className="flex-1" />
 
@@ -54,4 +67,3 @@ export default function TopBar(){
     </div>
   )
 }
-
