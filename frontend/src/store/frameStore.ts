@@ -206,16 +206,28 @@ const useFrameStore = create<State>((set, get) => ({
     input.setAttribute('webkitdirectory', '')
     input.setAttribute('directory', '')
     input.multiple = true
-    input.onchange = () => {
-      const files = Array.from(input.files || [])
+    
+    // Use addEventListener for more reliable event handling
+    input.addEventListener('change', (e) => {
+      const target = e.target as HTMLInputElement
+      const files = Array.from(target.files || [])
         .filter((f) => f.type.startsWith('image/'))
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      
+      if (files.length === 0) {
+        console.warn('No image files found in the selected folder')
+        return
+      }
+      
       const frames: Frame[] = files.map((f, idx) => ({
         i: idx + 1,
         url: URL.createObjectURL(f),
       }))
+      
+      console.log(`Loaded ${frames.length} image frames from folder`)
       set({ frames, cur: 0 })
-    }
+    })
+    
     input.click()
   },
 
@@ -223,17 +235,22 @@ const useFrameStore = create<State>((set, get) => ({
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = '.txt,.json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
+    
+    // Use addEventListener for more reliable event handling
+    input.addEventListener('change', async (e) => {
+      const target = e.target as HTMLInputElement
+      const f = target.files?.[0]
       if (!f) return
       try {
         const ret = await uploadAnnotation('gt', f)
         set({ gtAnnotationId: ret.annotation_id })
+        console.log('GT annotation uploaded successfully:', ret.annotation_id)
       } catch (e) {
         console.error('openGT failed', e)
         alert('GT 업로드 실패')
       }
-    }
+    })
+    
     input.click()
   },
 
@@ -241,17 +258,22 @@ const useFrameStore = create<State>((set, get) => ({
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = '.txt,.json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
+    
+    // Use addEventListener for more reliable event handling
+    input.addEventListener('change', async (e) => {
+      const target = e.target as HTMLInputElement
+      const f = target.files?.[0]
       if (!f) return
       try {
         const ret = await uploadAnnotation('pred', f)
         set({ predAnnotationId: ret.annotation_id })
+        console.log('Pred annotation uploaded successfully:', ret.annotation_id)
       } catch (e) {
         console.error('openPred failed', e)
         alert('Pred 업로드 실패')
       }
-    }
+    })
+    
     input.click()
   },
 
