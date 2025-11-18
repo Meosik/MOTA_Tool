@@ -74,14 +74,39 @@ export default function MapImageCanvas({
 
   // Filter annotations for current image (image_id matches currentImageIndex + 1)
   const currentImageId = currentImageIndex + 1;
-  const gt = useMemo(() => 
-    gtAnnotations.filter(ann => !ann.image_id || ann.image_id === currentImageId),
-    [gtAnnotations, currentImageId]
-  );
-  const pred = useMemo(() => 
-    predAnnotations.filter(ann => !ann.image_id || ann.image_id === currentImageId),
-    [predAnnotations, currentImageId]
-  );
+  
+  // More lenient filtering: if no image_id OR matches current image
+  const gt = useMemo(() => {
+    console.log('Filtering GT annotations:', {
+      totalGt: gtAnnotations.length,
+      currentImageId,
+      sampleAnn: gtAnnotations[0]
+    });
+    const filtered = gtAnnotations.filter(ann => {
+      // If no image_id field, show all (for non-COCO formats)
+      if (!ann.image_id) return true;
+      // Otherwise match current image
+      return ann.image_id === currentImageId;
+    });
+    console.log('Filtered GT result:', filtered.length);
+    return filtered;
+  }, [gtAnnotations, currentImageId]);
+  
+  const pred = useMemo(() => {
+    console.log('Filtering Pred annotations:', {
+      totalPred: predAnnotations.length,
+      currentImageId,
+      sampleAnn: predAnnotations[0]
+    });
+    const filtered = predAnnotations.filter(ann => {
+      // If no image_id field, show all (for non-COCO formats)
+      if (!ann.image_id) return true;
+      // Otherwise match current image
+      return ann.image_id === currentImageId;
+    });
+    console.log('Filtered Pred result:', filtered.length);
+    return filtered;
+  }, [predAnnotations, currentImageId]);
 
   console.log('MapImageCanvas:', { 
     currentImageIndex, 
@@ -91,7 +116,9 @@ export default function MapImageCanvas({
     predCount: pred.length,
     totalGt: gtAnnotations.length,
     totalPred: predAnnotations.length,
-    hasImage: !!currentImage
+    hasImage: !!currentImage,
+    gtSample: gt[0],
+    predSample: pred[0]
   });
 
   // Calculate layout (same as MOTA OverlayCanvas)

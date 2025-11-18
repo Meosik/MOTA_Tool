@@ -27,8 +27,25 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const imageStats = React.useMemo(() => {
     if (!currentImage) return null;
     
-    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id && (a.conf === undefined || a.conf >= 1.0));
-    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id && (a.conf || 0) >= conf);
+    console.log('MapControlPanel: Calculating stats for image', currentImage.id);
+    console.log('MapControlPanel: Total GT', gtAnnotations.length, 'Total Pred', predAnnotations.length);
+    
+    // More lenient filtering
+    const gtForImage = gtAnnotations.filter(a => {
+      // If no image_id, show for all images
+      if (!a.image_id) return true;
+      // Otherwise match current image
+      return a.image_id === currentImage.id;
+    });
+    
+    const predForImage = predAnnotations.filter(a => {
+      // If no image_id, show for all images
+      if (!a.image_id) return true;
+      // Otherwise match current image and confidence threshold
+      return a.image_id === currentImage.id && (a.conf || 0) >= conf;
+    });
+    
+    console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
     return {
       gtCount: gtForImage.length,
