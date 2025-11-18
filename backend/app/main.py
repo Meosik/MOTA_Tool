@@ -1,4 +1,9 @@
 # backend/app/main.py
+# Increase multipart form limits BEFORE importing FastAPI/Starlette
+# This allows uploading up to 10,000 images in a single request
+import os
+os.environ['STARLETTE_MAX_FIELDS'] = '10000'
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings

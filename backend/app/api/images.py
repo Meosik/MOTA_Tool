@@ -11,7 +11,10 @@ router = APIRouter()
 
 @router.post("/images/folder")
 async def upload_image_folder(images: List[UploadFile] = File(...)):
-    """Upload a folder of images for MAP mode."""
+    """Upload a folder of images for MAP mode.
+    
+    Supports large batches of images (configurable via multipart settings).
+    """
     if not images:
         raise HTTPException(status_code=400, detail="No images provided")
     
