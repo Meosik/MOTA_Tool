@@ -13,10 +13,17 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const undoMap = useMapStore(s => s.undo);
     const redoMap = useMapStore(s => s.redo);
     const resetMap = useMapStore(s => s.reset);
-    const { setImageId } = useMapContext();
-    const openMapFolder = () => openMapFolderStore(id => setImageId(Number(id)));
-    const openMapGT = () => openMapGTStore(id => setImageId(Number(id)));
-    const openMapPred = () => openMapPredStore(id => setImageId(Number(id)));
+    const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
+    const openMapFolder = () => openMapFolderStore(id => {
+      setFolderId(id);
+      setImageId(1); // Select first image
+    });
+    const openMapGT = () => openMapGTStore(id => {
+      setGtId(id);
+    });
+    const openMapPred = () => openMapPredStore(id => {
+      setPredId(id);
+    });
     return { openMapFolder, openMapGT, openMapPred, exportMapPred, undoMap, redoMap, resetMap };
   } else {
     // MOTA 모드에서는 더미 핸들러 반환

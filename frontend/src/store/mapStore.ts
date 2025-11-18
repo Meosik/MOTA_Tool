@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Annotation } from '../types/annotation';
+import { API_BASE } from '../lib/api';
 
 interface MapState {
   gtAnnotations: Annotation[];
@@ -149,7 +150,7 @@ export const useMapStore = create<MapState>((set, get) => ({
         form.append('images', file, (file as any).webkitRelativePath || file.name);
       });
       try {
-        const res = await fetch('/images/folder', { method: 'POST', body: form });
+        const res = await fetch(`${API_BASE}/images/folder`, { method: 'POST', body: form });
         if (!res.ok) throw new Error('업로드 실패');
         const data = await res.json();
         alert('이미지 폴더 업로드 성공: ' + (data.folder_id || '성공'));
@@ -170,7 +171,7 @@ export const useMapStore = create<MapState>((set, get) => ({
       const form = new FormData();
       form.append('file', file);
       try {
-        const res = await fetch('/annotations', { method: 'POST', body: form });
+        const res = await fetch(`${API_BASE}/annotations`, { method: 'POST', body: form });
         if (!res.ok) throw new Error('업로드 실패');
         const data = await res.json();
         alert('GT 업로드 성공: ' + data.annotation_id);
@@ -191,7 +192,7 @@ export const useMapStore = create<MapState>((set, get) => ({
       const form = new FormData();
       form.append('file', file);
       try {
-        const res = await fetch('/annotations', { method: 'POST', body: form });
+        const res = await fetch(`${API_BASE}/annotations`, { method: 'POST', body: form });
         if (!res.ok) throw new Error('업로드 실패');
         const data = await res.json();
         alert('Pred 업로드 성공: ' + data.annotation_id);

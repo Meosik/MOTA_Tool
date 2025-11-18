@@ -12,7 +12,6 @@ interface MapControlPanelProps {
 export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
   const [conf, setConf] = useState(0.0)
   const [iou, setIou] = useState(0.5)
-  const { openMapGT, openMapPred, exportMapPred } = useMapStore()
   
   // Use gtId/predId if provided, fallback to projectId/annotationId
   const effectiveGtId = gtId || projectId
@@ -20,45 +19,11 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   
   const { data, isLoading, error } = useMapMetrics(effectiveGtId, effectivePredId!, conf, iou)
 
-  const handleUploadGT = () => {
-    openMapGT((id) => {
-      console.log('GT uploaded:', id);
-    });
-  };
-
-  const handleUploadPred = () => {
-    openMapPred((id) => {
-      console.log('Pred uploaded:', id);
-    });
-  };
-
-  const handleExport = () => {
-    exportMapPred();
-  };
-
   return (
     <aside className="h-full min-h-0 w-80 border-l bg-white flex flex-col gap-6 p-4 font-sans text-[15px] shadow-sm overflow-y-auto">
-      {/* Upload Controls */}
-      <div className="flex flex-col gap-2">
-        <h3 className="font-bold text-brand-700 mb-2">Upload Annotations</h3>
-        <button
-          onClick={handleUploadGT}
-          className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
-        >
-          Upload GT
-        </button>
-        <button
-          onClick={handleUploadPred}
-          className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-        >
-          Upload Predictions
-        </button>
-        <button
-          onClick={handleExport}
-          className="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm"
-        >
-          Export Predictions
-        </button>
+      {/* Info message */}
+      <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded">
+        💡 TopBar에서 이미지 폴더, GT, Predictions를 업로드하고 내보내기를 할 수 있습니다.
       </div>
 
       {/* Threshold Controls */}

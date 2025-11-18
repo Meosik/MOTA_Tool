@@ -13,11 +13,8 @@ export default function MapPage() {
 }
 
 function MapPageInner() {
-  const { projectId, imageId, setImageId } = useMapContext();
+  const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
   const [annotationIdList, setAnnotationIdList] = useState<string[]>([]);
-  const [folderId, setFolderId] = useState<string | null>(null);
-  const [gtId, setGtId] = useState<string | null>(null);
-  const [predId, setPredId] = useState<string | null>(null);
   const annotationId = imageId ? String(imageId) : null;
 
   // Keyboard shortcuts for undo/redo

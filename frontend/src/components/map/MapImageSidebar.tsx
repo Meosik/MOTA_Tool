@@ -23,27 +23,15 @@ export default function MapImageSidebar({
   currentImageId,
   onImageSelect
 }: SidebarProps) {
-  const { openMapFolder } = useMapStore();
-
-  const handleUploadFolder = () => {
-    openMapFolder((fId) => {
-      console.log('Folder uploaded:', fId);
-      if (onUploadSuccess) {
-        onUploadSuccess(fId);
-      }
-    });
-  };
-
   return (
     <aside className="p-2 w-64 border-r flex flex-col gap-3 bg-gray-50 h-full min-h-0">
       <div className="flex flex-col gap-2">
         <div className="font-bold">Images</div>
-        <button
-          onClick={handleUploadFolder}
-          className="w-full px-3 py-2 bg-brand-600 text-white rounded hover:bg-brand-700 text-sm"
-        >
-          Upload Folder
-        </button>
+        {!folderId && (
+          <div className="text-xs text-gray-500 py-2">
+            TopBar에서 이미지 폴더를 업로드하세요
+          </div>
+        )}
       </div>
 
       {/* Image list */}
