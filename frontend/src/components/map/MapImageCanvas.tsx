@@ -18,7 +18,7 @@ export default function MapImageCanvas({
   imageUrl,
   interactive = false 
 }: MapImageCanvasProps) {
-  const { currentImageIndex, getImageUrl, gtAnnotations, predAnnotations } = useMapStore();
+  const { currentImageIndex, getImageUrl, gtAnnotations, predAnnotations, images } = useMapStore();
   const [visibleCategories, setVisibleCategories] = useState<Set<number>>(new Set());
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
 
@@ -29,12 +29,30 @@ export default function MapImageCanvas({
 
   const displayImageUrl = imageUrl || localImageUrl;
 
+  // Filter annotations for current image (image_id matches currentImageIndex + 1)
+  const currentImageId = currentImageIndex + 1;
+  const gt = useMemo(() => 
+    gtAnnotations.filter(ann => !ann.image_id || ann.image_id === currentImageId),
+    [gtAnnotations, currentImageId]
+  );
+  const pred = useMemo(() => 
+    predAnnotations.filter(ann => !ann.image_id || ann.image_id === currentImageId),
+    [predAnnotations, currentImageId]
+  );
+
+  console.log('MapImageCanvas:', { 
+    currentImageIndex, 
+    currentImageId, 
+    imageUrl: displayImageUrl?.substring(0, 50),
+    gtCount: gt.length,
+    predCount: pred.length,
+    totalGt: gtAnnotations.length,
+    totalPred: predAnnotations.length
+  });
+
   if (!displayImageUrl) {
     return <div className="flex-1 flex items-center justify-center text-gray-400">이미지를 선택하세요</div>;
   }
-
-  const gt = gtAnnotations;
-  const pred = predAnnotations;
 
   const { updateAnnotation } = useMapStore();
   

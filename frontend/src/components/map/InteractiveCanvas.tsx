@@ -64,7 +64,15 @@ export default function InteractiveCanvas({
     const ctx = canvas?.getContext('2d');
     const img = imageRef.current;
     
-    if (!canvas || !ctx || !img || !img.complete) return;
+    if (!canvas || !ctx || !img || !img.complete) {
+      console.log('InteractiveCanvas: Cannot draw -', { 
+        hasCanvas: !!canvas, 
+        hasCtx: !!ctx, 
+        hasImg: !!img, 
+        imgComplete: img?.complete 
+      });
+      return;
+    }
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -87,6 +95,12 @@ export default function InteractiveCanvas({
     );
 
     const allAnnotations = [...filteredGt, ...filteredPred];
+    
+    console.log('InteractiveCanvas: Drawing', { 
+      gtCount: filteredGt.length, 
+      predCount: filteredPred.length,
+      totalAnnotations: allAnnotations.length
+    });
 
     allAnnotations.forEach(ann => {
       const [x, y, w, h] = ann.bbox;
@@ -141,10 +155,15 @@ export default function InteractiveCanvas({
   }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, scale, offset, selectedAnnotation, categories]);
 
   useEffect(() => {
-    if (!imageUrl) return;
+    if (!imageUrl) {
+      console.log('InteractiveCanvas: No imageUrl provided');
+      return;
+    }
 
+    console.log('InteractiveCanvas: Loading image from URL:', imageUrl.substring(0, 50));
     const img = new Image();
     img.onload = () => {
+      console.log('InteractiveCanvas: Image loaded successfully', img.width, 'x', img.height);
       imageRef.current = img;
       const canvas = canvasRef.current;
       const container = containerRef.current;
@@ -162,7 +181,11 @@ export default function InteractiveCanvas({
           x: (canvas.width - img.width * newScale) / 2,
           y: (canvas.height - img.height * newScale) / 2
         });
+        console.log('InteractiveCanvas: Canvas setup complete', { scale: newScale, offset: { x: (canvas.width - img.width * newScale) / 2, y: (canvas.height - img.height * newScale) / 2 } });
       }
+    };
+    img.onerror = (err) => {
+      console.error('InteractiveCanvas: Image loading failed', err);
     };
     img.src = imageUrl;
   }, [imageUrl]);
