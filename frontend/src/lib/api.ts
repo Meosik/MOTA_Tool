@@ -18,18 +18,24 @@ export async function uploadAnnotation(kind: 'gt'|'pred', file: File){
 }
 
 // 프레임 f의 박스들 조회 (정규화된 /tracks 응답을 납작하게)
-export type FlatBox = { id: number|string, bbox: [number,number,number,number] };
+export type FlatBox = { id: number|string, bbox: [number,number,number,number], conf?: number };
 export async function fetchFrameBoxes(annotationId: string, f: number){
-  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[]}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f}&f1=${f}`);
+  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f}&f1=${f}`);
   const out: FlatBox[] = [];
   for (const tr of data.tracks || []) {
     for (const fr of tr.frames || []) {
       // f가 일치하는 것만
       if (Number(fr.f) === Number(f)) {
         const b = fr.bbox.map(Number);
-        out.push({ id: tr.id, bbox: [b[0],b[1],b[2],b[3]] as any });
+        out.push({ id: tr.id, bbox: [b[0],b[1],b[2],b[3]] as any, ...(fr.conf != null ? { conf: Number(fr.conf) } : {}) });
       }
     }
   }
   return out;
+}
+
+// 프레임 범위 f0~f1의 모든 박스들 조회 (배치)
+export async function fetchTracksWindow(annotationId: string, f0: number, f1: number){
+  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f0}&f1=${f1}`);
+  return data;
 }

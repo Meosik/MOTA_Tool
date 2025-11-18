@@ -6,12 +6,16 @@ from app.api.annotations import router as annotations_router
 from app.api.realtime import router as realtime_router
 from app.api.tracks import router as tracks_router 
 from app.api.export import router as export_router
+from app.api.images import router as images_router
+
+from app.api.analysis import router as analysis_router
+from app.api.map_metrics import router as map_metrics_router
 
 app = FastAPI(title=settings.APP_NAME)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,3 +32,6 @@ app.include_router(realtime_router)
 # ★ /tracks 라우터 명시 등록 (prefix 없이 바로 /tracks 노출)
 app.include_router(tracks_router)
 app.include_router(export_router)
+app.include_router(analysis_router)
+app.include_router(map_metrics_router, prefix="/map")
+app.include_router(images_router)

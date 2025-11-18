@@ -1,4 +1,4 @@
-import { useFrameStore } from '../store/frameStore'
+import useFrameStore from '../store/frameStore'
 
 export default function Timeline(){
   const { frames, cur, setCur, prefetchAround } = useFrameStore()
