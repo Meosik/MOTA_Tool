@@ -10,3 +10,6 @@ __pycache__/
 frontend/node_modules/.vite/
 
 appdata/annotations/
+
+# Frontend build artifacts
+frontend/dist/
