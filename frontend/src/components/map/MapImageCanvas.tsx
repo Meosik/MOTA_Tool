@@ -1,7 +1,7 @@
-import { useImageAnnotations, useUpdateAnnotation } from '../../hooks/mapApi';
 import type { Annotation } from '../../types/annotation';
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import InteractiveCanvas from './InteractiveCanvas';
+import { useMapStore } from '../../store/mapStore';
 
 interface MapImageCanvasProps {
   annotationId: string | null;
@@ -18,36 +18,28 @@ export default function MapImageCanvas({
   imageUrl,
   interactive = false 
 }: MapImageCanvasProps) {
-  const { data, isLoading, error } = useImageAnnotations(annotationId!);
-  const updateMutation = useUpdateAnnotation();
+  const { currentImageIndex, getImageUrl, gtAnnotations, predAnnotations } = useMapStore();
   const [visibleCategories, setVisibleCategories] = useState<Set<number>>(new Set());
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
 
-  if (!annotationId && !imageUrl) {
-    return <div className="flex-1 flex items-center justify-center">이미지를 선택하세요</div>;
-  }
-  
-  if (isLoading) {
-    return <div className="flex-1 flex items-center justify-center text-gray-400">로딩중…</div>;
-  }
-  
-  if (error) {
-    return <div className="flex-1 text-red-500">{String(error)}</div>;
+  // Get the current image URL from the store
+  const localImageUrl = useMemo(() => {
+    return getImageUrl(currentImageIndex);
+  }, [currentImageIndex, getImageUrl]);
+
+  const displayImageUrl = imageUrl || localImageUrl;
+
+  if (!displayImageUrl) {
+    return <div className="flex-1 flex items-center justify-center text-gray-400">이미지를 선택하세요</div>;
   }
 
-  const gt = Array.isArray(data?.gt) ? data.gt : [];
-  const pred = Array.isArray(data?.pred) ? data.pred : [];
-  const imageInfo = typeof data?.imageInfo === 'object' && data?.imageInfo !== null ? data.imageInfo : {};
-  const displayImageUrl = imageUrl || imageInfo.thumb_url || imageInfo.url;
+  const gt = gtAnnotations;
+  const pred = predAnnotations;
 
+  const { updateAnnotation } = useMapStore();
+  
   const handleAnnotationUpdate = (annotation: Annotation) => {
-    if (predAnnotationId && updateMutation) {
-      const updatedPred = pred.map(p => p.id === annotation.id ? annotation : p);
-      updateMutation.mutate({
-        annotationId: predAnnotationId,
-        data: { predictions: updatedPred }
-      });
-    }
+    updateAnnotation(annotation, 'pred');
   };
 
   // Use interactive canvas if requested and available

@@ -232,20 +232,37 @@ export const useMapStore = create<MapState>((set, get) => ({
   openMapGT: (cb) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.txt,.json';
+    input.accept = '.json';
     input.onchange = async (e: any) => {
       const file = e.target.files[0];
       if (!file) return;
-      const form = new FormData();
-      form.append('file', file);
+      
       try {
-        const res = await fetch(`${API_BASE}/annotations`, { method: 'POST', body: form });
-        if (!res.ok) throw new Error('업로드 실패');
-        const data = await res.json();
-        alert('GT 업로드 성공: ' + data.annotation_id);
-        if (cb) cb(data.annotation_id);
+        const text = await file.text();
+        const cocoData = JSON.parse(text);
+        
+        // Parse COCO format annotations
+        const annotations: Annotation[] = [];
+        if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
+          cocoData.annotations.forEach((ann: any) => {
+            annotations.push({
+              id: ann.id,
+              image_id: ann.image_id,
+              category: ann.category_id || 1,
+              bbox: ann.bbox || [0, 0, 0, 0],
+              conf: 1.0,
+              type: 'gt'
+            });
+          });
+        }
+        
+        get().setGT(annotations);
+        const annotationId = `gt_${Date.now()}`;
+        alert(`GT 로드 성공: ${annotations.length}개 annotations`);
+        if (cb) cb(annotationId);
       } catch (err) {
-        alert('GT 업로드 실패: ' + err);
+        alert('GT 로드 실패: ' + err);
+        console.error('GT loading error:', err);
       }
     };
     input.click();
@@ -253,20 +270,50 @@ export const useMapStore = create<MapState>((set, get) => ({
   openMapPred: (cb) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.txt,.json';
+    input.accept = '.json';
     input.onchange = async (e: any) => {
       const file = e.target.files[0];
       if (!file) return;
-      const form = new FormData();
-      form.append('file', file);
+      
       try {
-        const res = await fetch(`${API_BASE}/annotations`, { method: 'POST', body: form });
-        if (!res.ok) throw new Error('업로드 실패');
-        const data = await res.json();
-        alert('Pred 업로드 성공: ' + data.annotation_id);
-        if (cb) cb(data.annotation_id);
+        const text = await file.text();
+        const cocoData = JSON.parse(text);
+        
+        // Parse COCO format annotations
+        const annotations: Annotation[] = [];
+        if (Array.isArray(cocoData)) {
+          // Array format (predictions only)
+          cocoData.forEach((ann: any) => {
+            annotations.push({
+              id: ann.id,
+              image_id: ann.image_id,
+              category: ann.category_id || 1,
+              bbox: ann.bbox || [0, 0, 0, 0],
+              conf: ann.score !== undefined ? ann.score : 1.0,
+              type: 'pred'
+            });
+          });
+        } else if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
+          // Full COCO format
+          cocoData.annotations.forEach((ann: any) => {
+            annotations.push({
+              id: ann.id,
+              image_id: ann.image_id,
+              category: ann.category_id || 1,
+              bbox: ann.bbox || [0, 0, 0, 0],
+              conf: ann.score !== undefined ? ann.score : 1.0,
+              type: 'pred'
+            });
+          });
+        }
+        
+        get().setPred(annotations);
+        const annotationId = `pred_${Date.now()}`;
+        alert(`Predictions 로드 성공: ${annotations.length}개 annotations`);
+        if (cb) cb(annotationId);
       } catch (err) {
-        alert('Pred 업로드 실패: ' + err);
+        alert('Predictions 로드 실패: ' + err);
+        console.error('Predictions loading error:', err);
       }
     };
     input.click();

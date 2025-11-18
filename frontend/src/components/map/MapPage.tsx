@@ -12,8 +12,11 @@ export default function MapPage() {
   );
 }
 
+import { useMapStore } from '../../store/mapStore';
+
 function MapPageInner() {
   const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
+  const { setCurrentImageIndex, undo, redo, canUndo, canRedo } = useMapStore();
   const [annotationIdList, setAnnotationIdList] = useState<string[]>([]);
   const annotationId = imageId ? String(imageId) : null;
 
@@ -22,22 +25,23 @@ function MapPageInner() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
-        // Undo handled by store if needed
+        if (canUndo()) undo();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
-        // Redo handled by store if needed
+        if (canRedo()) redo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [undo, redo, canUndo, canRedo]);
 
   // Handle folder upload success
   const handleFolderUpload = useCallback((id: string) => {
     setFolderId(id);
-    // Optionally select first image
+    // Select first image
     setImageId(1);
-  }, [setImageId]);
+    setCurrentImageIndex(0);
+  }, [setFolderId, setImageId, setCurrentImageIndex]);
 
   // Handle annotation upload success
   const handleUploadSuccess = useCallback((id: string) => {
@@ -47,7 +51,9 @@ function MapPageInner() {
 
   const handleImageSelect = useCallback((imgId: number) => {
     setImageId(imgId);
-  }, [setImageId]);
+    // Update mapStore index (imgId is 1-based, index is 0-based)
+    setCurrentImageIndex(imgId - 1);
+  }, [setImageId, setCurrentImageIndex]);
 
   return (
     <div className="h-full grid grid-cols-[16rem_1fr_20rem] min-h-0">
