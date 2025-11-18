@@ -1,20 +1,74 @@
-import { useImageAnnotations } from '../../hooks/mapApi';
+import { useImageAnnotations, useUpdateAnnotation } from '../../hooks/mapApi';
 import type { Annotation } from '../../types/annotation';
-import React from 'react';
+import React, { useState } from 'react';
+import InteractiveCanvas from './InteractiveCanvas';
 
-export default function MapImageCanvas({ annotationId }: { annotationId: string | null }) {
+interface MapImageCanvasProps {
+  annotationId: string | null;
+  gtAnnotationId?: string | null;
+  predAnnotationId?: string | null;
+  imageUrl?: string | null;
+  interactive?: boolean;
+}
+
+export default function MapImageCanvas({ 
+  annotationId, 
+  gtAnnotationId,
+  predAnnotationId,
+  imageUrl,
+  interactive = false 
+}: MapImageCanvasProps) {
   const { data, isLoading, error } = useImageAnnotations(annotationId!);
-  if (!annotationId) return <div className="flex-1 flex items-center justify-center">이미지를 선택하세요</div>
-  if (isLoading) return <div className="flex-1 flex items-center justify-center text-gray-400">로딩중…</div>
-  if (error) return <div className="flex-1 text-red-500">{String(error)}</div>
+  const updateMutation = useUpdateAnnotation();
+  const [visibleCategories, setVisibleCategories] = useState<Set<number>>(new Set());
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
+
+  if (!annotationId && !imageUrl) {
+    return <div className="flex-1 flex items-center justify-center">이미지를 선택하세요</div>;
+  }
+  
+  if (isLoading) {
+    return <div className="flex-1 flex items-center justify-center text-gray-400">로딩중…</div>;
+  }
+  
+  if (error) {
+    return <div className="flex-1 text-red-500">{String(error)}</div>;
+  }
 
   const gt = Array.isArray(data?.gt) ? data.gt : [];
   const pred = Array.isArray(data?.pred) ? data.pred : [];
   const imageInfo = typeof data?.imageInfo === 'object' && data?.imageInfo !== null ? data.imageInfo : {};
+  const displayImageUrl = imageUrl || imageInfo.thumb_url || imageInfo.url;
+
+  const handleAnnotationUpdate = (annotation: Annotation) => {
+    if (predAnnotationId && updateMutation) {
+      const updatedPred = pred.map(p => p.id === annotation.id ? annotation : p);
+      updateMutation.mutate({
+        annotationId: predAnnotationId,
+        data: { predictions: updatedPred }
+      });
+    }
+  };
+
+  // Use interactive canvas if requested and available
+  if (interactive && displayImageUrl) {
+    return (
+      <InteractiveCanvas
+        imageUrl={displayImageUrl}
+        gtAnnotations={gt}
+        predAnnotations={pred}
+        visibleCategories={visibleCategories}
+        confidenceThreshold={confidenceThreshold}
+        onAnnotationUpdate={handleAnnotationUpdate}
+      />
+    );
+  }
+
+  // Fallback to simple SVG overlay
   return (
     <div className="flex-1 flex justify-center items-center h-full bg-gray-100 relative">
       <div style={{ position: 'relative' }}>
-        <img src={imageInfo.thumb_url || imageInfo.url} style={{ maxWidth: 800, maxHeight: 600, display: 'block' }} />
+        <img src={displayImageUrl} style={{ maxWidth: 800, maxHeight: 600, display: 'block' }} alt="annotation view" />
         <svg
           style={{
             position: 'absolute',

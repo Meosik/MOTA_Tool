@@ -1,4 +1,3 @@
-  // ... (불필요한 }, 제거)
 import { create } from 'zustand';
 import type { Annotation } from '../types/annotation';
 
@@ -7,10 +6,15 @@ interface MapState {
   predAnnotations: Annotation[];
   undoStack: Annotation[][];
   redoStack: Annotation[][];
+  editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
+  historyIndex: number;
   setGT: (anns: Annotation[]) => void;
   setPred: (anns: Annotation[]) => void;
+  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => void;
   undo: () => void;
   redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
   reset: () => void;
   openMapFolder: (cb?: (annotationId: string) => void) => void;
   openMapGT: (cb?: (annotationId: string) => void) => void;
@@ -23,42 +27,98 @@ export const useMapStore = create<MapState>((set, get) => ({
   predAnnotations: [],
   undoStack: [],
   redoStack: [],
-  setGT: (anns) => set(state => ({
-    undoStack: [...state.undoStack, state.gtAnnotations],
-    gtAnnotations: anns,
-    redoStack: [],
-  })),
-  setPred: (anns) => set(state => ({
-    undoStack: [...state.undoStack, state.predAnnotations],
-    predAnnotations: anns,
-    redoStack: [],
-  })),
-  undo: () => set(state => {
-    if (state.undoStack.length === 0) return state;
-    const prev = state.undoStack[state.undoStack.length - 1];
+  editHistory: [],
+  historyIndex: -1,
+  
+  setGT: (anns) => set(state => {
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type: 'gt', annotations: anns });
     return {
-      ...state,
-      gtAnnotations: prev,
-      undoStack: state.undoStack.slice(0, -1),
-      redoStack: [state.gtAnnotations, ...state.redoStack],
-    };
-  }),
-  redo: () => set(state => {
-    if (state.redoStack.length === 0) return state;
-    const next = state.redoStack[0];
-    return {
-      ...state,
-      gtAnnotations: next,
-      redoStack: state.redoStack.slice(1),
+      gtAnnotations: anns,
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
       undoStack: [...state.undoStack, state.gtAnnotations],
+      redoStack: [],
     };
   }),
-  reset: () => set(state => ({
-    undoStack: [...state.undoStack, state.gtAnnotations],
-    gtAnnotations: [],
-    predAnnotations: [],
-    redoStack: [],
-  })),
+  
+  setPred: (anns) => set(state => {
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type: 'pred', annotations: anns });
+    return {
+      predAnnotations: anns,
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
+      undoStack: [...state.undoStack, state.predAnnotations],
+      redoStack: [],
+    };
+  }),
+  
+  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => set(state => {
+    const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
+    const updated = annotations.map(a => a.id === ann.id ? ann : a);
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type, annotations: updated });
+    
+    return {
+      ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
+    };
+  }),
+  
+  undo: () => set(state => {
+    if (state.historyIndex <= 0) return state;
+    const prevIndex = state.historyIndex - 1;
+    const prevState = state.editHistory[prevIndex];
+    
+    return {
+      ...state,
+      ...(prevState.type === 'gt' 
+        ? { gtAnnotations: prevState.annotations }
+        : { predAnnotations: prevState.annotations }
+      ),
+      historyIndex: prevIndex,
+    };
+  }),
+  
+  redo: () => set(state => {
+    if (state.historyIndex >= state.editHistory.length - 1) return state;
+    const nextIndex = state.historyIndex + 1;
+    const nextState = state.editHistory[nextIndex];
+    
+    return {
+      ...state,
+      ...(nextState.type === 'gt'
+        ? { gtAnnotations: nextState.annotations }
+        : { predAnnotations: nextState.annotations }
+      ),
+      historyIndex: nextIndex,
+    };
+  }),
+  
+  canUndo: () => {
+    const state = get();
+    return state.historyIndex > 0;
+  },
+  
+  canRedo: () => {
+    const state = get();
+    return state.historyIndex < state.editHistory.length - 1;
+  },
+  
+  reset: () => set(state => {
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type: 'pred', annotations: [] });
+    return {
+      gtAnnotations: [],
+      predAnnotations: [],
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
+      undoStack: [...state.undoStack, state.gtAnnotations],
+      redoStack: [],
+    };
+  }),
   openMapFolder: (cb?: (annotationId: string) => void) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -142,8 +202,33 @@ export const useMapStore = create<MapState>((set, get) => ({
     };
     input.click();
   },
-  exportMapPred: () => {
-    // TODO: 파일 다운로드 구현
-    alert('MAP Pred 어노테이션 내보내기');
+  exportMapPred: async () => {
+    const state = get();
+    if (state.predAnnotations.length === 0) {
+      alert('No predictions to export');
+      return;
+    }
+    
+    // Convert to COCO format
+    const cocoFormat = state.predAnnotations.map((ann, idx) => ({
+      id: ann.id || idx + 1,
+      image_id: ann.image_id || 1,
+      category_id: ann.category || 1,
+      bbox: ann.bbox,
+      score: ann.conf || 1.0,
+    }));
+    
+    // Create blob and download
+    const blob = new Blob([JSON.stringify(cocoFormat, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `predictions_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    alert('Predictions exported successfully');
   },
 }));
