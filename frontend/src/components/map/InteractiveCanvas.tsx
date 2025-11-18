@@ -11,12 +11,14 @@ interface InteractiveCanvasProps {
   categories?: Record<number, { name: string; color?: string }>;
 }
 
+type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
+
 type DragState = {
   active: boolean;
   annotation: Annotation | null;
   startX: number;
   startY: number;
-  handle: 'move' | 'resize' | null;
+  handle: 'move' | ResizeHandle | null;
 };
 
 const CATEGORY_COLORS = [
@@ -46,6 +48,8 @@ export default function InteractiveCanvas({
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null);
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
 
   const getCategoryColor = (categoryId: number | undefined, isGt: boolean) => {
     if (isGt) return '#22c55e'; // Green for GT
@@ -113,10 +117,23 @@ export default function InteractiveCanvas({
         }
       }
 
-      // Draw resize handle if selected
+      // Draw resize handles if selected (8 handles: 4 corners + 4 edges)
       if (isSelected && !isGt) {
+        const handleSize = 8;
+        const halfHandle = handleSize / 2;
         ctx.fillStyle = color;
-        ctx.fillRect(x + w - 6, y + h - 6, 6, 6);
+        
+        // Corner handles
+        ctx.fillRect(x - halfHandle, y - halfHandle, handleSize, handleSize); // Top-left
+        ctx.fillRect(x + w - halfHandle, y - halfHandle, handleSize, handleSize); // Top-right
+        ctx.fillRect(x - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom-left
+        ctx.fillRect(x + w - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom-right
+        
+        // Edge handles
+        ctx.fillRect(x + w/2 - halfHandle, y - halfHandle, handleSize, handleSize); // Top
+        ctx.fillRect(x + w/2 - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom
+        ctx.fillRect(x - halfHandle, y + h/2 - halfHandle, handleSize, handleSize); // Left
+        ctx.fillRect(x + w - halfHandle, y + h/2 - halfHandle, handleSize, handleSize); // Right
       }
 
       ctx.restore();
@@ -161,17 +178,41 @@ export default function InteractiveCanvas({
     };
   };
 
-  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; handle: 'move' | 'resize' } | null => {
+  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; handle: 'move' | ResizeHandle } | null => {
     const imgCoords = canvasToImageCoords(x, y);
+    const handleSize = 10; // Detection area for handles
     
     // Check predictions only (GT is not editable)
     for (let i = predAnnotations.length - 1; i >= 0; i--) {
       const ann = predAnnotations[i];
       const [bx, by, bw, bh] = ann.bbox;
       
-      // Check resize handle
-      if (Math.abs(imgCoords.x - (bx + bw)) < 10 && Math.abs(imgCoords.y - (by + bh)) < 10) {
-        return { annotation: ann, handle: 'resize' };
+      // Check corner handles first
+      if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
+        return { annotation: ann, handle: 'tl' }; // Top-left
+      }
+      if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
+        return { annotation: ann, handle: 'tr' }; // Top-right
+      }
+      if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
+        return { annotation: ann, handle: 'bl' }; // Bottom-left
+      }
+      if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
+        return { annotation: ann, handle: 'br' }; // Bottom-right
+      }
+      
+      // Check edge handles
+      if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
+        return { annotation: ann, handle: 't' }; // Top
+      }
+      if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
+        return { annotation: ann, handle: 'b' }; // Bottom
+      }
+      if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
+        return { annotation: ann, handle: 'l' }; // Left
+      }
+      if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
+        return { annotation: ann, handle: 'r' }; // Right
       }
       
       // Check if inside bbox
@@ -201,7 +242,51 @@ export default function InteractiveCanvas({
       });
       setSelectedAnnotation(hit.annotation);
       e.preventDefault();
+    } else {
+      setSelectedAnnotation(null);
+      setShowCategoryPicker(false);
     }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const hit = findAnnotationAt(x, y);
+    if (hit && hit.handle === 'move') {
+      // Show category picker for the selected annotation
+      setSelectedAnnotation(hit.annotation);
+      setPickerPosition({ x: e.clientX, y: e.clientY });
+      setShowCategoryPicker(true);
+      e.preventDefault();
+    }
+  };
+
+  const handleCategoryChange = (newCategoryId: number) => {
+    if (selectedAnnotation && onAnnotationUpdate) {
+      const updatedAnnotation = { ...selectedAnnotation, category: newCategoryId };
+      onAnnotationUpdate(updatedAnnotation);
+      setSelectedAnnotation(updatedAnnotation);
+    }
+    setShowCategoryPicker(false);
+  };
+
+  const getCursorForHandle = (handle: string): string => {
+    const cursorMap: Record<string, string> = {
+      'move': 'move',
+      'tl': 'nwse-resize',
+      'tr': 'nesw-resize',
+      'bl': 'nesw-resize',
+      'br': 'nwse-resize',
+      't': 'ns-resize',
+      'b': 'ns-resize',
+      'l': 'ew-resize',
+      'r': 'ew-resize'
+    };
+    return cursorMap[handle] || 'default';
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -218,11 +303,42 @@ export default function InteractiveCanvas({
       
       const newAnnotation = { ...dragState.annotation };
       const [bx, by, bw, bh] = newAnnotation.bbox;
+      const minSize = 10;
       
       if (dragState.handle === 'move') {
         newAnnotation.bbox = [bx + dx, by + dy, bw, bh];
-      } else if (dragState.handle === 'resize') {
-        newAnnotation.bbox = [bx, by, Math.max(10, bw + dx), Math.max(10, bh + dy)];
+      } else if (dragState.handle === 'br') {
+        // Bottom-right: resize width and height
+        newAnnotation.bbox = [bx, by, Math.max(minSize, bw + dx), Math.max(minSize, bh + dy)];
+      } else if (dragState.handle === 'tl') {
+        // Top-left: move position and resize
+        const newW = Math.max(minSize, bw - dx);
+        const newH = Math.max(minSize, bh - dy);
+        newAnnotation.bbox = [bx + (bw - newW), by + (bh - newH), newW, newH];
+      } else if (dragState.handle === 'tr') {
+        // Top-right: resize width, move top
+        const newW = Math.max(minSize, bw + dx);
+        const newH = Math.max(minSize, bh - dy);
+        newAnnotation.bbox = [bx, by + (bh - newH), newW, newH];
+      } else if (dragState.handle === 'bl') {
+        // Bottom-left: move left, resize height
+        const newW = Math.max(minSize, bw - dx);
+        const newH = Math.max(minSize, bh + dy);
+        newAnnotation.bbox = [bx + (bw - newW), by, newW, newH];
+      } else if (dragState.handle === 't') {
+        // Top edge: move top
+        const newH = Math.max(minSize, bh - dy);
+        newAnnotation.bbox = [bx, by + (bh - newH), bw, newH];
+      } else if (dragState.handle === 'b') {
+        // Bottom edge: resize height
+        newAnnotation.bbox = [bx, by, bw, Math.max(minSize, bh + dy)];
+      } else if (dragState.handle === 'l') {
+        // Left edge: move left
+        const newW = Math.max(minSize, bw - dx);
+        newAnnotation.bbox = [bx + (bw - newW), by, newW, bh];
+      } else if (dragState.handle === 'r') {
+        // Right edge: resize width
+        newAnnotation.bbox = [bx, by, Math.max(minSize, bw + dx), bh];
       }
       
       setDragState(prev => ({ ...prev, startX: x, startY: y, annotation: newAnnotation }));
@@ -230,7 +346,7 @@ export default function InteractiveCanvas({
     } else {
       // Update cursor
       const hit = findAnnotationAt(x, y);
-      canvas.style.cursor = hit ? (hit.handle === 'resize' ? 'nwse-resize' : 'move') : 'default';
+      canvas.style.cursor = hit ? getCursorForHandle(hit.handle) : 'default';
     }
   };
 
@@ -287,10 +403,37 @@ export default function InteractiveCanvas({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
+        onDoubleClick={handleDoubleClick}
       />
       <div className="absolute bottom-4 right-4 bg-white px-3 py-2 rounded shadow text-sm">
         Zoom: {(scale * 100).toFixed(0)}%
       </div>
+      
+      {/* Category Picker Modal */}
+      {showCategoryPicker && selectedAnnotation && (
+        <div 
+          className="fixed bg-white border border-gray-300 rounded shadow-lg p-2 z-50"
+          style={{ left: pickerPosition.x, top: pickerPosition.y }}
+        >
+          <div className="text-sm font-semibold mb-2">카테고리 선택</div>
+          <select
+            autoFocus
+            className="w-full border border-gray-300 rounded px-2 py-1"
+            value={selectedAnnotation.category}
+            onChange={(e) => handleCategoryChange(Number(e.target.value))}
+            onBlur={() => setShowCategoryPicker(false)}
+          >
+            {Object.entries(categories).map(([id, cat]) => (
+              <option key={id} value={id}>
+                {cat.name}
+              </option>
+            ))}
+          </select>
+          <div className="text-xs text-gray-500 mt-1">
+            더블클릭으로 카테고리 변경
+          </div>
+        </div>
+      )}
     </div>
   );
 }
