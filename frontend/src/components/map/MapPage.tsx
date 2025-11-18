@@ -20,6 +20,21 @@ function MapPageInner() {
   const [predId, setPredId] = useState<string | null>(null);
   const annotationId = imageId ? String(imageId) : null;
 
+  // Keyboard shortcuts for undo/redo
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        // Undo handled by store if needed
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        // Redo handled by store if needed
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Handle folder upload success
   const handleFolderUpload = useCallback((id: string) => {
     setFolderId(id);

@@ -14,6 +14,9 @@ export type Annotation = {
   id: number | string;
   bbox: [number, number, number, number];
   conf?: number;
-  category?: string;
+  score?: number;
+  category?: string | number;
+  category_id?: number;
+  image_id?: number;
   type?: 'gt' | 'pred';
 };
