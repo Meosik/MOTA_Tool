@@ -70,6 +70,9 @@ function calculatePRCurve(gtBoxes: any[], predBoxes: any[], iouThreshold: number
   const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
   const points: Array<{precision: number, recall: number, threshold: number}> = [];
   
+  // Start with point at recall=0, precision=1 (or first valid point)
+  points.push({precision: 1, recall: 0, threshold: 1});
+  
   let tp = 0;
   let fp = 0;
   const matched = new Set<number>();
@@ -102,10 +105,7 @@ function calculatePRCurve(gtBoxes: any[], predBoxes: any[], iouThreshold: number
     points.push({precision, recall, threshold});
   });
   
-  // Add point at (0, 0)
-  points.push({precision: 1, recall: 0, threshold: 1});
-  
-  return points.reverse();
+  return points;
 }
 
 // PR Curve visualization component
@@ -115,9 +115,9 @@ function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], pre
     [gtBoxes, predBoxes, iouThreshold]
   );
   
-  const width = 200;
-  const height = 150;
-  const padding = 25;
+  const width = 280;
+  const height = 200;
+  const padding = 30;
   const chartWidth = width - 2 * padding;
   const chartHeight = height - 2 * padding;
   
@@ -178,14 +178,6 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const predAnnotations = useMapStore(s => s.predAnnotations);
   const getImageUrl = useMapStore(s => s.getImageUrl);
   const iou = useMapStore(s => s.iou);
-  
-  // Pagination state - show 5 images at a time
-  const [currentPage, setCurrentPage] = React.useState(0);
-  const itemsPerPage = 5;
-  const totalPages = Math.ceil(images.length / itemsPerPage);
-  const startIdx = currentPage * itemsPerPage;
-  const endIdx = Math.min(startIdx + itemsPerPage, images.length);
-  const visibleImages = images.slice(startIdx, endIdx);
 
   // Simple check - show placeholder if no folder or no images
   if (!folderId) {
@@ -204,17 +196,15 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
     );
   }
 
-  // Display list with thumbnails and metadata (5 at a time)
+  // Display list with thumbnails and metadata (scrollable, up to 8 visible)
   return (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-2 text-xs text-gray-500 font-semibold flex items-center justify-between">
+      <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
         <span>이미지 목록 ({images.length}개)</span>
-        <span className="text-xs">Page {currentPage + 1}/{totalPages}</span>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" style={{maxHeight: '280px'}}>
         <div className="space-y-1 p-2">
-          {visibleImages.map((image, relIdx) => {
-            const idx = startIdx + relIdx;
+          {images.map((image, idx) => {
             const thumbnailUrl = getImageUrl(idx);
             const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
             const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
@@ -265,29 +255,6 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
           })}
         </div>
       </div>
-      
-      {/* Pagination controls */}
-      {totalPages > 1 && (
-        <div className="p-2 border-t border-gray-200 flex items-center justify-between text-xs">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
-            disabled={currentPage === 0}
-            className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            ← Prev
-          </button>
-          <span className="text-gray-600">
-            {startIdx + 1}-{endIdx} of {images.length}
-          </span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
-            disabled={currentPage >= totalPages - 1}
-            className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Next →
-          </button>
-        </div>
-      )}
       
       {/* PR Curve for current image */}
       {currentImageId !== null && (() => {

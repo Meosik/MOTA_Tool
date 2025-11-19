@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useMapMetrics } from '../../hooks/mapApi'
 import { useMapStore } from '../../store/mapStore'
+import { getCategoryNameById } from '../../constants/cocoCategories'
 
 // Calculate IoU (Intersection over Union) between two bounding boxes
 function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
@@ -178,7 +179,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
                 onChange={() => toggleAllInGroup('gt', cat)}
                 className="w-3 h-3"
               />
-              <span className="text-gray-600">Category {cat} ({anns.length})</span>
+              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
             </div>
             
             {expandedGroups.has(`gt-cat-${cat}`) && anns.map(ann => (
@@ -223,7 +224,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
                 onChange={() => toggleAllInGroup('pred', cat)}
                 className="w-3 h-3"
               />
-              <span className="text-gray-600">Category {cat} ({anns.length})</span>
+              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
             </div>
             
             {expandedGroups.has(`pred-cat-${cat}`) && anns.map(ann => (
