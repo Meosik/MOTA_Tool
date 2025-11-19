@@ -7,6 +7,7 @@ import { useMapContext } from './map/MapContext'
 function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
   if (mode === 'MAP') {
     const openMapFolderStore = useMapStore(s => s.openMapFolder);
+    const setCurrentImageIndex = useMapStore(s => s.setCurrentImageIndex);
     const openMapGTStore = useMapStore(s => s.openMapGT);
     const openMapPredStore = useMapStore(s => s.openMapPred);
     const exportMapPred = useMapStore(s => s.exportMapPred);
@@ -16,7 +17,8 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
     const openMapFolder = () => openMapFolderStore(id => {
       setFolderId(id);
-      setImageId(1); // Select first image
+      setImageId(1); // Select first image (1-based ID)
+      setCurrentImageIndex(0); // Set store index (0-based)
     });
     const openMapGT = () => openMapGTStore(id => {
       setGtId(id);
