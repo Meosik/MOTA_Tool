@@ -18,6 +18,10 @@ interface MapState {
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
   historyIndex: number;
   
+  // Server annotation IDs for syncing edits
+  gtAnnotationId: string | null;
+  predAnnotationId: string | null;
+  
   // Threshold values (like MOTA mode)
   iou: number;
   conf: number;
@@ -65,6 +69,45 @@ function clearUrlCache() {
   urlCache.clear();
 }
 
+// Debounce mechanism for backend sync
+let syncTimeoutId: NodeJS.Timeout | null = null;
+const SYNC_DEBOUNCE_MS = 1000; // Wait 1 second after last edit before syncing
+
+async function syncAnnotationsToBackend(annotationId: string, annotations: Annotation[], categories: any) {
+  try {
+    // Convert to COCO format
+    const cocoData = {
+      annotations: annotations.map(ann => ({
+        id: ann.id,
+        image_id: ann.image_id,
+        category_id: ann.category,
+        bbox: ann.bbox,
+        score: ann.conf,
+        area: ann.bbox[2] * ann.bbox[3], // width * height
+        iscrowd: 0
+      })),
+      categories: categories ? Object.entries(categories).map(([id, name]) => ({
+        id: parseInt(id),
+        name: name as string
+      })) : []
+    };
+    
+    const response = await fetch(`${API_BASE}/annotations/${annotationId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cocoData)
+    });
+    
+    if (!response.ok) {
+      console.error('[mapStore] Failed to sync annotations to backend');
+    } else {
+      console.log('[mapStore] Annotations synced to backend:', annotationId);
+    }
+  } catch (err) {
+    console.error('[mapStore] Error syncing annotations:', err);
+  }
+}
+
 export const useMapStore = create<MapState>((set, get) => ({
   images: [],
   currentImageIndex: 0,
@@ -76,6 +119,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   redoStack: [],
   editHistory: [],
   historyIndex: -1,
+  gtAnnotationId: null,
+  predAnnotationId: null,
   
   // Threshold values (matching MOTA mode defaults)
   iou: 0.5,
@@ -127,26 +172,42 @@ export const useMapStore = create<MapState>((set, get) => ({
     };
   }),
   
-  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => set(state => {
-    // id와 image_id가 모두 일치하는 어노테이션만 교체
-    const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
-    const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
-    // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
-    if (type === 'pred') {
-      console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
-      console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
-      const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
-      console.log('[updateAnnotation] Number of annotations changed:', changedCount);
-      console.log('[updateAnnotation] Total predictions:', annotations.length);
+  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => {
+    set(state => {
+      // id와 image_id가 모두 일치하는 어노테이션만 교체
+      const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
+      const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
+      // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
+      if (type === 'pred') {
+        console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
+        console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
+        const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
+        console.log('[updateAnnotation] Number of annotations changed:', changedCount);
+        console.log('[updateAnnotation] Total predictions:', annotations.length);
+      }
+      const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+      newHistory.push({ type, annotations: updated });
+      return {
+        ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
+        editHistory: newHistory,
+        historyIndex: newHistory.length - 1,
+      };
+    });
+    
+    // Debounced sync to backend
+    const state = get();
+    const annotationId = type === 'gt' ? state.gtAnnotationId : state.predAnnotationId;
+    if (annotationId) {
+      if (syncTimeoutId) {
+        clearTimeout(syncTimeoutId);
+      }
+      syncTimeoutId = setTimeout(() => {
+        const currentState = get();
+        const annotations = type === 'gt' ? currentState.gtAnnotations : currentState.predAnnotations;
+        syncAnnotationsToBackend(annotationId, annotations, currentState.categories);
+      }, SYNC_DEBOUNCE_MS);
     }
-    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
-    newHistory.push({ type, annotations: updated });
-    return {
-      ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
-      editHistory: newHistory,
-      historyIndex: newHistory.length - 1,
-    };
-  }),
+  },
   
   undo: () => set(state => {
     if (state.historyIndex <= 0) return state;
@@ -361,6 +422,9 @@ export const useMapStore = create<MapState>((set, get) => ({
         const annotationId = result.annotation_id;
         console.log('[mapStore] GT uploaded to backend:', annotationId);
         
+        // Store annotation ID for future syncing
+        set({ gtAnnotationId: annotationId });
+        
         alert(`GT 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
       } catch (err) {
@@ -436,6 +500,9 @@ export const useMapStore = create<MapState>((set, get) => ({
         const result = await response.json();
         const annotationId = result.annotation_id;
         console.log('[mapStore] Pred uploaded to backend:', annotationId);
+        
+        // Store annotation ID for future syncing
+        set({ predAnnotationId: annotationId });
         
         alert(`Predictions 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
