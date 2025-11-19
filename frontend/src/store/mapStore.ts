@@ -342,8 +342,26 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         get().setGT(annotations);
         if (categories) set({ categories });
-        const annotationId = `gt_${Date.now()}`;
-        alert(`GT 로드 성공: ${annotations.length}개 annotations`);
+        
+        // Upload to backend
+        const formData = new FormData();
+        formData.append('kind', 'gt');
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE}/annotations`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to upload GT annotations to backend');
+        }
+        
+        const result = await response.json();
+        const annotationId = result.annotation_id;
+        console.log('[mapStore] GT uploaded to backend:', annotationId);
+        
+        alert(`GT 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
       } catch (err) {
         alert('GT 로드 실패: ' + err);
@@ -400,8 +418,26 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         get().setPred(annotations);
         if (categories) set({ categories });
-        const annotationId = `pred_${Date.now()}`;
-        alert(`Predictions 로드 성공: ${annotations.length}개 annotations`);
+        
+        // Upload to backend
+        const formData = new FormData();
+        formData.append('kind', 'pred');
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE}/annotations`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to upload Pred annotations to backend');
+        }
+        
+        const result = await response.json();
+        const annotationId = result.annotation_id;
+        console.log('[mapStore] Pred uploaded to backend:', annotationId);
+        
+        alert(`Predictions 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
       } catch (err) {
         alert('Predictions 로드 실패: ' + err);
