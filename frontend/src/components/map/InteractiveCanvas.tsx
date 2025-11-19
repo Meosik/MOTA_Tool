@@ -85,10 +85,19 @@ export default function InteractiveCanvas({
     ctx.restore();
 
     // Filter and draw annotations
-    const filteredPred = predAnnotations.filter(ann => 
+    let filteredPred = predAnnotations.filter(ann => 
       (ann.conf ?? 1) >= confidenceThreshold &&
       (visibleCategories.size === 0 || visibleCategories.has(ann.category as any))
     );
+
+    // If dragging, replace the annotation being dragged with the updated version from dragState
+    if (dragState.active && dragState.annotation) {
+      filteredPred = filteredPred.map(ann => 
+        (ann.id === dragState.annotation?.id && ann.image_id === dragState.annotation?.image_id) 
+          ? dragState.annotation 
+          : ann
+      );
+    }
 
     const filteredGt = gtAnnotations.filter(ann =>
       visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
@@ -152,7 +161,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, scale, offset, selectedAnnotation, categories]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {
