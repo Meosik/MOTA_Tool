@@ -175,13 +175,13 @@ export default function InteractiveCanvas({
       ctx.fillStyle = isGt ? 'rgba(34,197,94,0.15)' : 'rgba(99,102,241,0.13)';
       ctx.fillRect(x, y, w, h);
 
-      // Draw label
-      if (ann.category !== undefined || ann.conf !== undefined) {
-        const label = `${categories[ann.category as any]?.name ?? ann.category ?? ''} ${ann.conf !== undefined ? ann.conf.toFixed(2) : ''}`.trim();
+      // Draw label (category name only, no confidence)
+      if (ann.category !== undefined) {
+        const label = categories[ann.category as any]?.name ?? ann.category ?? '';
         if (label) {
           ctx.fillStyle = color;
           ctx.font = '12px sans-serif';
-          ctx.fillText(label, x, y - 4);
+          ctx.fillText(String(label), x, y - 4);
         }
       }
 

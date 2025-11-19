@@ -25,6 +25,46 @@ function calculateIoU(box1: [number, number, number, number], box2: [number, num
   return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
+// Calculate simple AP for a single image
+function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number): number {
+  if (gtBoxes.length === 0) return predBoxes.length === 0 ? 1.0 : 0.0;
+  if (predBoxes.length === 0) return 0.0;
+  
+  // Sort predictions by confidence (descending)
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+  
+  let tp = 0;
+  const matched = new Set<number>();
+  
+  // For each prediction, find best matching GT
+  for (const pred of sortedPreds) {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+    
+    gtBoxes.forEach((gt, idx) => {
+      if (matched.has(idx)) return;
+      const iou = calculateIoU(pred.bbox, gt.bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = idx;
+      }
+    });
+    
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    }
+  }
+  
+  // Simple precision = TP / (TP + FP)
+  const precision = tp / sortedPreds.length;
+  // Simple recall = TP / total GT
+  const recall = tp / gtBoxes.length;
+  
+  // Simple AP as average of precision and recall
+  return (precision + recall) / 2;
+}
+
 interface MapControlPanelProps {
   projectId: string;
   annotationId: string | null;
@@ -89,11 +129,15 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
+    // Calculate AP for current image
+    const imageAP = calculateImageAP(gtForImage, predForImage, iou);
+    
     return {
       gtCount: gtForImage.length,
       predCount: predForImage.length,
       imageName: currentImage.name,
       imageId: currentImage.id,
+      mAP: imageAP,
     };
   }, [currentImage, gtAnnotations, predAnnotations, conf, iou]);
 
@@ -107,11 +151,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
 
   return (
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
-      {/* Info message */}
-      <div className="text-sm text-neutral-500">
-        💡 TopBar에서 이미지 폴더, GT, Predictions를 업로드하고 내보내기를 할 수 있습니다.
-      </div>
-
       {/* IoU Threshold */}
       <div className="space-y-2">
         <div className="text-sm font-semibold">IoU Threshold</div>
@@ -184,6 +223,15 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             <span className="text-green-600">GT: {imageStats.gtCount}</span>
             <span className="text-orange-600">Pred: {imageStats.predCount}</span>
           </div>
+        </div>
+      )}
+
+      {/* Current Image mAP */}
+      {imageStats && (
+        <div className="space-y-1">
+          <div className="text-sm font-semibold">Current Image mAP</div>
+          <div className="text-2xl font-mono">{(imageStats.mAP * 100).toFixed(2)}%</div>
+          <div className="text-xs text-neutral-600">Average Precision for this image</div>
         </div>
       )}
 
