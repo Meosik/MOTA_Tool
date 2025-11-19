@@ -115,7 +115,7 @@ function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], pre
     [gtBoxes, predBoxes, iouThreshold]
   );
   
-  const width = 260;
+  const width = 240;
   const height = 200;
   const padding = 30;
   const chartWidth = width - 2 * padding;

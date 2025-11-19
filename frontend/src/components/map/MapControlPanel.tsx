@@ -79,7 +79,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   gtAnnotations: any[];
   predAnnotations: any[];
 }) {
-  const visibleInstances = useMapStore(s => s.visibleInstances);
+  const visibleInstances = useMapStore(s => s.visibleInstances) || new Set<string>();
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
@@ -252,7 +252,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const conf = useMapStore(s => s.conf);
   const setIou = useMapStore(s => s.setIou);
   const setConf = useMapStore(s => s.setConf);
-  const exportFilteredPred = useMapStore(s => s.exportFilteredPred);
   
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
@@ -262,21 +261,13 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  // Manual calculation trigger
-  const [shouldCalculate, setShouldCalculate] = useState(false);
-  
-  // Call backend API to calculate mAP only when button is clicked
-  const { data, isLoading, error, refetch } = useMapMetrics(
+  // Call backend API to calculate mAP automatically (always enabled)
+  const { data, isLoading, error } = useMapMetrics(
     effectiveGtId, 
     effectivePredId!, 
     conf, 
-    iou,
-    false  // Disabled by default
-  )
-  
-  const handleCalculate = () => {
-    refetch();
-  };
+    iou
+  );
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -409,24 +400,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
           <div className="text-xs text-neutral-600">Average Precision for this image</div>
         </div>
       )}
-
-      {/* Calculate and Export Buttons */}
-      <div className="flex gap-2">
-        <button 
-          onClick={handleCalculate}
-          disabled={!effectiveGtId || !effectivePredId || isLoading}
-          className="flex-1 px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium"
-        >
-          {isLoading ? 'Calculating...' : 'Calculate mAP'}
-        </button>
-        <button 
-          onClick={exportFilteredPred}
-          disabled={predAnnotations.length === 0}
-          className="flex-1 px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium"
-        >
-          Export
-        </button>
-      </div>
 
       {/* Overall Dataset Metrics */}
       <div className="space-y-1">
