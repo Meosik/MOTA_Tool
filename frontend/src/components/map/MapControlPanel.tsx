@@ -47,7 +47,17 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  const { data, isLoading, error } = useMapMetrics(effectiveGtId, effectivePredId!, conf, iou)
+  // Only call API if we have server-stored annotations (not local files)
+  // Local files have IDs like 'gt_1234567890' or 'pred_1234567890'
+  const isLocalFile = (effectiveGtId && effectiveGtId.startsWith('gt_')) || 
+                      (effectivePredId && effectivePredId.startsWith('pred_'))
+  
+  const { data, isLoading, error } = useMapMetrics(
+    isLocalFile ? '' : effectiveGtId, 
+    isLocalFile ? '' : effectivePredId!, 
+    conf, 
+    iou
+  )
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -185,41 +195,50 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       <div className="space-y-1">
         <div className="text-sm font-semibold">Overall Dataset</div>
         
-        {error && (
-          <div className="text-xs text-red-500">Error loading metrics</div>
-        )}
-        
-        {isLoading ? (
-          <div className="text-xs text-neutral-600">Loading metrics...</div>
-        ) : data ? (
+        {isLocalFile ? (
+          <div className="text-xs text-neutral-600">
+            로컬 파일 모드: 전체 데이터셋 mAP 계산은 서버 기반 어노테이션에서만 지원됩니다.
+            현재 이미지별 통계는 위에서 확인할 수 있습니다.
+          </div>
+        ) : (
           <>
-            <div className="text-2xl font-mono">{typeof data.mAP === 'number' ? (data.mAP * 100).toFixed(2) + '%' : '—'}</div>
-            <div className="text-xs text-neutral-600">Mean Average Precision</div>
-
-            {data.class_aps && typeof data.class_aps === 'object' && Object.keys(data.class_aps).length > 0 && (
-              <div className="mt-3 space-y-1">
-                <div className="text-sm font-semibold">Per-Class AP</div>
-                <div className="max-h-48 overflow-y-auto space-y-1">
-                  {Object.entries(data.class_aps).map(([cls, ap]) => (
-                    <div key={cls} className="flex justify-between items-center text-xs">
-                      <span className="text-neutral-700">{cls}</span>
-                      <span className="font-mono text-neutral-600">
-                        {((ap as number) * 100).toFixed(2)}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {error && (
+              <div className="text-xs text-red-500">Error loading metrics</div>
             )}
+            
+            {isLoading ? (
+              <div className="text-xs text-neutral-600">Loading metrics...</div>
+            ) : data ? (
+              <>
+                <div className="text-2xl font-mono">{typeof data.mAP === 'number' ? (data.mAP * 100).toFixed(2) + '%' : '—'}</div>
+                <div className="text-xs text-neutral-600">Mean Average Precision</div>
 
-            {data.num_categories !== undefined && (
-              <div className="text-xs text-neutral-600 mt-2">
-                Categories: {data.num_categories} | Images: {data.num_images || 'N/A'}
-              </div>
+                {data.class_aps && typeof data.class_aps === 'object' && Object.keys(data.class_aps).length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <div className="text-sm font-semibold">Per-Class AP</div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {Object.entries(data.class_aps).map(([cls, ap]) => (
+                        <div key={cls} className="flex justify-between items-center text-xs">
+                          <span className="text-neutral-700">{cls}</span>
+                          <span className="font-mono text-neutral-600">
+                            {((ap as number) * 100).toFixed(2)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {data.num_categories !== undefined && (
+                  <div className="text-xs text-neutral-600 mt-2">
+                    Categories: {data.num_categories} | Images: {data.num_images || 'N/A'}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-xs text-neutral-600">No metrics available. Upload GT and Predictions to calculate.</div>
             )}
           </>
-        ) : (
-          <div className="text-xs text-neutral-600">No metrics available. Upload GT and Predictions to calculate.</div>
         )}
       </div>
     </aside>
