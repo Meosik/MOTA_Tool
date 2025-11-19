@@ -491,25 +491,39 @@ export default function InteractiveCanvas({
       {/* Category Picker Modal */}
       {showCategoryPicker && selectedAnnotation && (
         <div 
-          className="fixed bg-white border border-gray-300 rounded shadow-lg p-2 z-50"
+          className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
           style={{ left: pickerPosition.x, top: pickerPosition.y }}
         >
-          <div className="text-sm font-semibold mb-2">카테고리 선택</div>
-          <select
+          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO ID)</div>
+          <input
+            type="number"
             autoFocus
             className="w-full border border-gray-300 rounded px-2 py-1"
-            value={selectedAnnotation.category}
-            onChange={(e) => handleCategoryChange(Number(e.target.value))}
+            value={selectedAnnotation.category ?? ''}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === '') {
+                handleCategoryChange(0);
+              } else {
+                const num = parseInt(value, 10);
+                if (!isNaN(num) && num >= 0) {
+                  handleCategoryChange(num);
+                }
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setShowCategoryPicker(false);
+              } else if (e.key === 'Escape') {
+                setShowCategoryPicker(false);
+              }
+            }}
             onBlur={() => setShowCategoryPicker(false)}
-          >
-            {Object.entries(categories).map(([id, cat]) => (
-              <option key={id} value={id}>
-                {cat.name}
-              </option>
-            ))}
-          </select>
+            placeholder="Enter COCO category ID"
+            min="0"
+          />
           <div className="text-xs text-gray-500 mt-1">
-            더블클릭으로 카테고리 변경
+            COCO 데이터셋 카테고리 ID (숫자) 입력
           </div>
         </div>
       )}

@@ -11,10 +11,14 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const { images, getImageUrl, gtAnnotations, predAnnotations } = useMapStore();
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Debug logging
+  console.log('[MapImageList] folderId:', folderId, 'images.length:', images.length, 'currentImageId:', currentImageId);
+
   if (!folderId || images.length === 0) {
+    console.log('[MapImageList] Showing placeholder - folderId:', folderId, 'images.length:', images.length);
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        Upload images to get started
+        {!folderId ? 'TopBar에서 이미지 폴더를 업로드하세요' : 'Upload images to get started'}
       </div>
     );
   }
