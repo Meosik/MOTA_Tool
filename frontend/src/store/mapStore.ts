@@ -117,9 +117,11 @@ export const useMapStore = create<MapState>((set, get) => ({
     const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
     // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
     if (type === 'pred') {
-      console.log('[updateAnnotation] predAnnotations(before):', annotations);
-      console.log('[updateAnnotation] predAnnotations(after):', updated);
-      console.log('[updateAnnotation] ann:', ann);
+      console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
+      console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
+      const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
+      console.log('[updateAnnotation] Number of annotations changed:', changedCount);
+      console.log('[updateAnnotation] Total predictions:', annotations.length);
     }
     const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
     newHistory.push({ type, annotations: updated });
