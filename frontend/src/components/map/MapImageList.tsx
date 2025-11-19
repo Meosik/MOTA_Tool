@@ -115,7 +115,7 @@ function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], pre
     [gtBoxes, predBoxes, iouThreshold]
   );
   
-  const width = 280;
+  const width = 260;
   const height = 200;
   const padding = 30;
   const chartWidth = width - 2 * padding;
@@ -202,7 +202,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
       <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
         <span>이미지 목록 ({images.length}개)</span>
       </div>
-      <div className="flex-1 overflow-y-auto" style={{maxHeight: '280px'}}>
+      <div className="flex-1 overflow-y-auto" style={{maxHeight: '340px'}}>
         <div className="space-y-1 p-2">
           {images.map((image, idx) => {
             const thumbnailUrl = getImageUrl(idx);

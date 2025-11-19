@@ -22,6 +22,11 @@ interface MapState {
   gtAnnotationId: string | null;
   predAnnotationId: string | null;
   
+  // Instance visibility control
+  visibleInstances: Set<string>;
+  setVisibleInstances: (instances: Set<string>) => void;
+  toggleInstanceVisibility: (id: string) => void;
+  
   // Threshold values (like MOTA mode)
   iou: number;
   conf: number;
@@ -46,6 +51,7 @@ interface MapState {
   openMapGT: (cb?: (annotationId: string) => void) => void;
   openMapPred: (cb?: (annotationId: string) => void) => void;
   exportMapPred: () => void;
+  exportFilteredPred: () => void;  // Export with threshold filtering
 }
 
 // ObjectURL management (similar to frameStore)
@@ -121,6 +127,16 @@ export const useMapStore = create<MapState>((set, get) => ({
   historyIndex: -1,
   gtAnnotationId: null,
   predAnnotationId: null,
+  
+  // Instance visibility
+  visibleInstances: new Set<string>(),
+  setVisibleInstances: (instances) => set({ visibleInstances: instances }),
+  toggleInstanceVisibility: (id) => set(state => {
+    const next = new Set(state.visibleInstances);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return { visibleInstances: next };
+  }),
   
   // Threshold values (matching MOTA mode defaults)
   iou: 0.5,
@@ -541,5 +557,74 @@ export const useMapStore = create<MapState>((set, get) => ({
     URL.revokeObjectURL(url);
     
     alert('Predictions exported successfully');
+  },
+  
+  exportFilteredPred: async () => {
+    const state = get();
+    if (state.predAnnotations.length === 0) {
+      alert('No predictions to export');
+      return;
+    }
+    
+    // Helper to calculate IoU
+    const calculateIoU = (box1: [number, number, number, number], box2: [number, number, number, number]): number => {
+      const [x1, y1, w1, h1] = box1;
+      const [x2, y2, w2, h2] = box2;
+      const xLeft = Math.max(x1, x2);
+      const yTop = Math.max(y1, y2);
+      const xRight = Math.min(x1 + w1, x2 + w2);
+      const yBottom = Math.min(y1 + h1, y2 + h2);
+      if (xRight < xLeft || yBottom < yTop) return 0.0;
+      const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+      const unionArea = w1 * h1 + w2 * h2 - intersectionArea;
+      return unionArea > 0 ? intersectionArea / unionArea : 0.0;
+    };
+    
+    // Filter predictions by confidence threshold and IoU threshold with GT
+    const filteredPreds = state.predAnnotations.filter(pred => {
+      // Filter by confidence threshold
+      if ((pred.conf || 0) < state.conf) return false;
+      
+      // Filter by IoU threshold - must have IoU >= threshold with at least one GT box
+      if (state.iou > 0 && state.gtAnnotations.length > 0) {
+        const gtForImage = state.gtAnnotations.filter(gt => 
+          !gt.image_id || gt.image_id === pred.image_id
+        );
+        
+        if (gtForImage.length > 0) {
+          const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(pred.bbox, gt.bbox)));
+          if (maxIoU < state.iou) return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    if (filteredPreds.length === 0) {
+      alert('No predictions pass the current thresholds');
+      return;
+    }
+    
+    // Convert to COCO format
+    const cocoFormat = filteredPreds.map((ann, idx) => ({
+      id: ann.id || idx + 1,
+      image_id: ann.image_id || 1,
+      category_id: ann.category || 1,
+      bbox: ann.bbox,
+      score: ann.conf || 1.0,
+    }));
+    
+    // Create blob and download
+    const blob = new Blob([JSON.stringify(cocoFormat, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `predictions_filtered_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    alert(`Filtered predictions exported: ${filteredPreds.length}/${state.predAnnotations.length} annotations (IoU≥${state.iou.toFixed(2)}, Conf≥${state.conf.toFixed(2)})`);
   },
 }));

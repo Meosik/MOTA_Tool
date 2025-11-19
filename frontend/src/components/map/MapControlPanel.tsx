@@ -79,7 +79,8 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   gtAnnotations: any[];
   predAnnotations: any[];
 }) {
-  const [visibleInstances, setVisibleInstances] = useState<Set<string>>(new Set());
+  const visibleInstances = useMapStore(s => s.visibleInstances);
+  const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
   // Initialize all instances as visible
@@ -92,7 +93,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       allIds.add(`pred-${a.id}`);
     });
     setVisibleInstances(allIds);
-  }, [currentImage.id, gtAnnotations, predAnnotations]);
+  }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
   
   // Group annotations by type and category
   const groupedAnns = React.useMemo(() => {
@@ -251,6 +252,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const conf = useMapStore(s => s.conf);
   const setIou = useMapStore(s => s.setIou);
   const setConf = useMapStore(s => s.setConf);
+  const exportFilteredPred = useMapStore(s => s.exportFilteredPred);
   
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
@@ -260,13 +262,21 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  // Call backend API to calculate mAP if both GT and Pred are available
-  const { data, isLoading, error } = useMapMetrics(
+  // Manual calculation trigger
+  const [shouldCalculate, setShouldCalculate] = useState(false);
+  
+  // Call backend API to calculate mAP only when button is clicked
+  const { data, isLoading, error, refetch } = useMapMetrics(
     effectiveGtId, 
     effectivePredId!, 
     conf, 
-    iou
+    iou,
+    false  // Disabled by default
   )
+  
+  const handleCalculate = () => {
+    refetch();
+  };
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -400,6 +410,24 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         </div>
       )}
 
+      {/* Calculate and Export Buttons */}
+      <div className="flex gap-2">
+        <button 
+          onClick={handleCalculate}
+          disabled={!effectiveGtId || !effectivePredId || isLoading}
+          className="flex-1 px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          {isLoading ? 'Calculating...' : 'Calculate mAP'}
+        </button>
+        <button 
+          onClick={exportFilteredPred}
+          disabled={predAnnotations.length === 0}
+          className="flex-1 px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          Export
+        </button>
+      </div>
+
       {/* Overall Dataset Metrics */}
       <div className="space-y-1">
         <div className="text-sm font-semibold">Overall Dataset</div>
@@ -409,7 +437,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         )}
         
         {isLoading ? (
-          <div className="text-xs text-neutral-600">Loading metrics...</div>
+          <div className="text-xs text-neutral-600">Calculating metrics...</div>
         ) : data ? (
           <>
             <div className="text-2xl font-mono">{typeof data.mAP === 'number' ? (data.mAP * 100).toFixed(2) + '%' : '—'}</div>

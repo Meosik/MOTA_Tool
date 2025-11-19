@@ -30,7 +30,7 @@ export function useImageAnnotations(annotationId: string | null | undefined) {
 }
 
 // Get mAP metrics
-export function useMapMetrics(gtId: string, predId: string, conf: number, iou: number) {
+export function useMapMetrics(gtId: string, predId: string, conf: number, iou: number, enabled: boolean = true) {
   return useQuery({ 
     queryKey: ['map-metrics', gtId, predId, conf, iou], 
     queryFn: async () => {
@@ -45,7 +45,7 @@ export function useMapMetrics(gtId: string, predId: string, conf: number, iou: n
       if (!res.ok) throw new Error('Failed to calculate mAP');
       return res.json();
     },
-    enabled: !!gtId && !!predId
+    enabled: enabled && !!gtId && !!predId
   });
 }
 
