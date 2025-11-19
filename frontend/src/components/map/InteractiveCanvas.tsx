@@ -16,6 +16,7 @@ type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
 type DragState = {
   active: boolean;
   annotation: Annotation | null;
+  annotationIndex: number;  // Index in predAnnotations array
   startX: number;
   startY: number;
   handle: 'move' | ResizeHandle | null;
@@ -41,6 +42,7 @@ export default function InteractiveCanvas({
   const [dragState, setDragState] = useState<DragState>({
     active: false,
     annotation: null,
+    annotationIndex: -1,
     startX: 0,
     startY: 0,
     handle: null
@@ -84,20 +86,19 @@ export default function InteractiveCanvas({
     ctx.drawImage(img, 0, 0);
     ctx.restore();
 
+    // If dragging, replace the annotation being dragged with the updated version from dragState
+    let predToRender = predAnnotations;
+    if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
+      predToRender = predAnnotations.map((ann, idx) => 
+        idx === dragState.annotationIndex ? dragState.annotation! : ann
+      );
+    }
+
     // Filter and draw annotations
-    let filteredPred = predAnnotations.filter(ann => 
+    const filteredPred = predToRender.filter(ann => 
       (ann.conf ?? 1) >= confidenceThreshold &&
       (visibleCategories.size === 0 || visibleCategories.has(ann.category as any))
     );
-
-    // If dragging, replace the annotation being dragged with the updated version from dragState
-    if (dragState.active && dragState.annotation) {
-      filteredPred = filteredPred.map(ann => 
-        (ann.id === dragState.annotation?.id && ann.image_id === dragState.annotation?.image_id) 
-          ? dragState.annotation 
-          : ann
-      );
-    }
 
     const filteredGt = gtAnnotations.filter(ann =>
       visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
@@ -210,7 +211,7 @@ export default function InteractiveCanvas({
     };
   };
 
-  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; handle: 'move' | ResizeHandle } | null => {
+  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; index: number; handle: 'move' | ResizeHandle } | null => {
     const imgCoords = canvasToImageCoords(x, y);
     const handleSize = 10; // Detection area for handles
     
@@ -221,35 +222,35 @@ export default function InteractiveCanvas({
       
       // Check corner handles first
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 'tl' }; // Top-left
+        return { annotation: ann, index: i, handle: 'tl' }; // Top-left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 'tr' }; // Top-right
+        return { annotation: ann, index: i, handle: 'tr' }; // Top-right
       }
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'bl' }; // Bottom-left
+        return { annotation: ann, index: i, handle: 'bl' }; // Bottom-left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'br' }; // Bottom-right
+        return { annotation: ann, index: i, handle: 'br' }; // Bottom-right
       }
       
       // Check edge handles
       if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 't' }; // Top
+        return { annotation: ann, index: i, handle: 't' }; // Top
       }
       if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'b' }; // Bottom
+        return { annotation: ann, index: i, handle: 'b' }; // Bottom
       }
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
-        return { annotation: ann, handle: 'l' }; // Left
+        return { annotation: ann, index: i, handle: 'l' }; // Left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
-        return { annotation: ann, handle: 'r' }; // Right
+        return { annotation: ann, index: i, handle: 'r' }; // Right
       }
       
       // Check if inside bbox
       if (imgCoords.x >= bx && imgCoords.x <= bx + bw && imgCoords.y >= by && imgCoords.y <= by + bh) {
-        return { annotation: ann, handle: 'move' };
+        return { annotation: ann, index: i, handle: 'move' };
       }
     }
     
@@ -268,6 +269,7 @@ export default function InteractiveCanvas({
       setDragState({
         active: true,
         annotation: hit.annotation,
+        annotationIndex: hit.index,
         startX: x,
         startY: y,
         handle: hit.handle
@@ -392,6 +394,7 @@ export default function InteractiveCanvas({
     setDragState({
       active: false,
       annotation: null,
+      annotationIndex: -1,
       startX: 0,
       startY: 0,
       handle: null
