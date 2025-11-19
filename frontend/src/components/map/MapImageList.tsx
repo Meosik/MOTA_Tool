@@ -8,11 +8,16 @@ interface MapImageListProps {
 }
 
 export default function MapImageList({ folderId, currentImageId, onImageSelect }: MapImageListProps) {
-  const { images, getImageUrl, gtAnnotations, predAnnotations } = useMapStore();
+  // Use individual selectors to ensure proper reactivity
+  const images = useMapStore(s => s.images);
+  const getImageUrl = useMapStore(s => s.getImageUrl);
+  const gtAnnotations = useMapStore(s => s.gtAnnotations);
+  const predAnnotations = useMapStore(s => s.predAnnotations);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Debug logging
-  console.log('[MapImageList] folderId:', folderId, 'images.length:', images.length, 'currentImageId:', currentImageId);
+  // Debug logging - log whenever component renders
+  console.log('[MapImageList] RENDER - folderId:', folderId, 'images.length:', images.length, 'currentImageId:', currentImageId);
+  console.log('[MapImageList] images array:', images);
 
   if (!folderId || images.length === 0) {
     console.log('[MapImageList] Showing placeholder - folderId:', folderId, 'images.length:', images.length);
