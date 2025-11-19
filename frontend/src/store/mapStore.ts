@@ -191,22 +191,31 @@ export const useMapStore = create<MapState>((set, get) => ({
   
   resetCurrentFrame: () => set(state => {
     const currentImage = state.images[state.currentImageIndex];
-    if (!currentImage) return state;
+    if (!currentImage) {
+      console.log('[resetCurrentFrame] No current image found');
+      return state;
+    }
     
     const currentImageId = currentImage.id;
+    console.log('[resetCurrentFrame] Current image ID:', currentImageId);
+    console.log('[resetCurrentFrame] Total pred annotations:', state.predAnnotations.length);
+    console.log('[resetCurrentFrame] Total original pred annotations:', state.originalPredAnnotations.length);
     
     // Get original pred annotations for current frame
     const originalForCurrentFrame = state.originalPredAnnotations.filter(
       ann => ann.image_id === currentImageId
     );
+    console.log('[resetCurrentFrame] Original annotations for current frame:', originalForCurrentFrame.length);
     
     // Get current pred annotations for other frames
     const otherFramePreds = state.predAnnotations.filter(
       ann => ann.image_id !== currentImageId
     );
+    console.log('[resetCurrentFrame] Pred annotations for other frames:', otherFramePreds.length);
     
     // Combine: original annotations for current frame + unchanged annotations for other frames
     const resetPredAnnotations = [...otherFramePreds, ...originalForCurrentFrame];
+    console.log('[resetCurrentFrame] Total after reset:', resetPredAnnotations.length);
     
     const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
     newHistory.push({ type: 'pred', annotations: resetPredAnnotations });
