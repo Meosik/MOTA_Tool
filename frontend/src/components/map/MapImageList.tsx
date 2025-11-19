@@ -60,6 +60,117 @@ function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number
   return (precision + recall) / 2;
 }
 
+// Calculate PR curve points for current image
+function calculatePRCurve(gtBoxes: any[], predBoxes: any[], iouThreshold: number): Array<{precision: number, recall: number, threshold: number}> {
+  if (gtBoxes.length === 0 || predBoxes.length === 0) {
+    return [{precision: 0, recall: 0, threshold: 0}];
+  }
+  
+  // Sort predictions by confidence descending
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+  const points: Array<{precision: number, recall: number, threshold: number}> = [];
+  
+  let tp = 0;
+  let fp = 0;
+  const matched = new Set<number>();
+  
+  // Calculate precision/recall at each prediction
+  sortedPreds.forEach((pred, idx) => {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+    
+    gtBoxes.forEach((gt, gtIdx) => {
+      if (matched.has(gtIdx)) return;
+      const iou = calculateIoU(pred.bbox, gt.bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = gtIdx;
+      }
+    });
+    
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    } else {
+      fp++;
+    }
+    
+    const precision = tp / (tp + fp);
+    const recall = tp / gtBoxes.length;
+    const threshold = pred.conf || 0;
+    
+    points.push({precision, recall, threshold});
+  });
+  
+  // Add point at (0, 0)
+  points.push({precision: 1, recall: 0, threshold: 1});
+  
+  return points.reverse();
+}
+
+// PR Curve visualization component
+function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], predBoxes: any[], iouThreshold: number}) {
+  const points = React.useMemo(() => 
+    calculatePRCurve(gtBoxes, predBoxes, iouThreshold),
+    [gtBoxes, predBoxes, iouThreshold]
+  );
+  
+  const width = 200;
+  const height = 150;
+  const padding = 25;
+  const chartWidth = width - 2 * padding;
+  const chartHeight = height - 2 * padding;
+  
+  // Create path for PR curve
+  const pathData = points.map((p, idx) => {
+    const x = padding + p.recall * chartWidth;
+    const y = padding + (1 - p.precision) * chartHeight;
+    return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`;
+  }).join(' ');
+  
+  return (
+    <div className="p-2 border-t border-gray-200 bg-gray-50">
+      <div className="text-xs font-semibold text-gray-700 mb-1">PR Curve (Current Image)</div>
+      <svg width={width} height={height} className="bg-white rounded border border-gray-300">
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map(val => (
+          <g key={val}>
+            <line 
+              x1={padding} y1={padding + (1-val) * chartHeight} 
+              x2={padding + chartWidth} y2={padding + (1-val) * chartHeight}
+              stroke="#e5e7eb" strokeWidth="1"
+            />
+            <line 
+              x1={padding + val * chartWidth} y1={padding} 
+              x2={padding + val * chartWidth} y2={padding + chartHeight}
+              stroke="#e5e7eb" strokeWidth="1"
+            />
+          </g>
+        ))}
+        
+        {/* Axes */}
+        <line x1={padding} y1={padding} x2={padding} y2={padding + chartHeight} stroke="#374151" strokeWidth="2"/>
+        <line x1={padding} y1={padding + chartHeight} x2={padding + chartWidth} y2={padding + chartHeight} stroke="#374151" strokeWidth="2"/>
+        
+        {/* PR Curve */}
+        <path d={pathData} fill="none" stroke="#3b82f6" strokeWidth="2"/>
+        
+        {/* Axis labels */}
+        <text x={padding + chartWidth/2} y={height - 5} fontSize="10" textAnchor="middle" fill="#374151">Recall</text>
+        <text x="10" y={padding + chartHeight/2} fontSize="10" textAnchor="middle" fill="#374151" transform={`rotate(-90, 10, ${padding + chartHeight/2})`}>Precision</text>
+        
+        {/* Tick labels */}
+        {[0, 0.5, 1].map(val => (
+          <g key={val}>
+            <text x={padding + val * chartWidth} y={padding + chartHeight + 12} fontSize="8" textAnchor="middle" fill="#6b7280">{val.toFixed(1)}</text>
+            <text x={padding - 5} y={padding + (1-val) * chartHeight + 3} fontSize="8" textAnchor="end" fill="#6b7280">{val.toFixed(1)}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 export default function MapImageList({ folderId, currentImageId, onImageSelect }: MapImageListProps) {
   // Get images and annotations from store
   const images = useMapStore(s => s.images);
@@ -177,6 +288,13 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
           </button>
         </div>
       )}
+      
+      {/* PR Curve for current image */}
+      {currentImageId !== null && (() => {
+        const gtForCurrent = gtAnnotations.filter(a => a.image_id === currentImageId);
+        const predForCurrent = predAnnotations.filter(a => a.image_id === currentImageId);
+        return <PRCurveChart gtBoxes={gtForCurrent} predBoxes={predForCurrent} iouThreshold={iou} />;
+      })()}
     </div>
   );
 }
