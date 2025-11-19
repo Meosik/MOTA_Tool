@@ -56,7 +56,7 @@ export default function MapImageCanvas({
   imageUrl,
   interactive = false 
 }: MapImageCanvasProps) {
-  const { currentImageIndex, getImageUrl, gtAnnotations, predAnnotations, images } = useMapStore();
+  const { currentImageIndex, getImageUrl, gtAnnotations, predAnnotations, images, categories } = useMapStore();
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
 
@@ -72,54 +72,21 @@ export default function MapImageCanvas({
     return getImageUrl(currentImageIndex);
   }, [imageUrl, currentImage, currentImageIndex, getImageUrl]);
 
-  // Filter annotations for current image (image_id matches currentImageIndex + 1)
-  const currentImageId = currentImageIndex + 1;
-  
-  // More lenient filtering: if no image_id OR matches current image
+  // Filter annotations for current image (image_id matches currentImage.id)
+  const currentImageId = currentImage?.id;
+
   const gt = useMemo(() => {
-    console.log('Filtering GT annotations:', {
-      totalGt: gtAnnotations.length,
-      currentImageId,
-      sampleAnn: gtAnnotations[0]
-    });
-    const filtered = gtAnnotations.filter(ann => {
-      // If no image_id field, show all (for non-COCO formats)
-      if (!ann.image_id) return true;
-      // Otherwise match current image
-      return ann.image_id === currentImageId;
-    });
-    console.log('Filtered GT result:', filtered.length);
-    return filtered;
+    if (!currentImageId) return [];
+    return gtAnnotations.filter(ann => ann.image_id === currentImageId);
   }, [gtAnnotations, currentImageId]);
-  
+
   const pred = useMemo(() => {
-    console.log('Filtering Pred annotations:', {
-      totalPred: predAnnotations.length,
-      currentImageId,
-      sampleAnn: predAnnotations[0]
-    });
-    const filtered = predAnnotations.filter(ann => {
-      // If no image_id field, show all (for non-COCO formats)
-      if (!ann.image_id) return true;
-      // Otherwise match current image
-      return ann.image_id === currentImageId;
-    });
-    console.log('Filtered Pred result:', filtered.length);
-    return filtered;
+    if (!currentImageId) return [];
+    return predAnnotations.filter(ann => ann.image_id === currentImageId);
   }, [predAnnotations, currentImageId]);
 
-  console.log('MapImageCanvas:', { 
-    currentImageIndex, 
-    currentImageId, 
-    imageUrl: displayImageUrl?.substring(0, 50),
-    gtCount: gt.length,
-    predCount: pred.length,
-    totalGt: gtAnnotations.length,
-    totalPred: predAnnotations.length,
-    hasImage: !!currentImage,
-    gtSample: gt[0],
-    predSample: pred[0]
-  });
+  // 디버깅 로그 (필요시)
+  // console.log('MapImageCanvas:', { currentImageIndex, currentImageId, gtCount: gt.length, predCount: pred.length });
 
   // Calculate layout (same as MOTA OverlayCanvas)
   const layout = useMemo(()=>{
@@ -195,7 +162,14 @@ export default function MapImageCanvas({
         ctx.rect(p.x, p.y, cw, ch); 
         ctx.fill(); 
         ctx.stroke();
-        drawIdLabel(ctx, String(g.id || g.category || 'GT'), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 1.0)');
+        // category name만 표시
+        let label = 'GT';
+        if (categories && g.category && categories[g.category as number]) {
+          label = categories[g.category as number];
+        } else if (typeof g.category === 'string') {
+          label = g.category;
+        }
+        drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 1.0)');
       }
       console.log('MapImageCanvas: Drew', gt.length, 'GT boxes (green)');
     }
@@ -215,7 +189,13 @@ export default function MapImageCanvas({
         ctx.rect(p.x, p.y, cw, ch); 
         ctx.fill(); 
         ctx.stroke();
-        const label = b.conf !== undefined ? `${b.id || b.category || ''} ${b.conf.toFixed(2)}` : String(b.id || b.category || 'Pred');
+        // category name만 표시
+        let label = 'Pred';
+        if (categories && b.category && categories[b.category as number]) {
+          label = categories[b.category as number];
+        } else if (typeof b.category === 'string') {
+          label = b.category;
+        }
         drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 1.0)');
       }
       console.log('MapImageCanvas: Drew', pred.length, 'Pred boxes (orange)');

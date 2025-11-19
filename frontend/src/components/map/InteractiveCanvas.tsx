@@ -290,7 +290,8 @@ export default function InteractiveCanvas({
 
   const handleCategoryChange = (newCategoryId: number) => {
     if (selectedAnnotation && onAnnotationUpdate) {
-      const updatedAnnotation = { ...selectedAnnotation, category: newCategoryId };
+      // image_id, id를 항상 유지
+      const updatedAnnotation = { ...selectedAnnotation, category: newCategoryId, image_id: selectedAnnotation.image_id, id: selectedAnnotation.id };
       onAnnotationUpdate(updatedAnnotation);
       setSelectedAnnotation(updatedAnnotation);
     }
@@ -375,7 +376,9 @@ export default function InteractiveCanvas({
 
   const handleMouseUp = () => {
     if (dragState.active && dragState.annotation && onAnnotationUpdate) {
-      onAnnotationUpdate(dragState.annotation);
+      // image_id, id를 항상 유지
+      const ann = dragState.annotation;
+      onAnnotationUpdate({ ...ann, image_id: ann.image_id, id: ann.id });
     }
     setDragState({
       active: false,

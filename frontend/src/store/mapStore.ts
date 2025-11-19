@@ -11,6 +11,7 @@ interface MapState {
   
   gtAnnotations: Annotation[];
   predAnnotations: Annotation[];
+  categories?: { [id: number]: string };
   undoStack: Annotation[][];
   redoStack: Annotation[][];
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
@@ -61,6 +62,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   currentImageIndex: 0,
   gtAnnotations: [],
   predAnnotations: [],
+  categories: undefined,
   undoStack: [],
   redoStack: [],
   editHistory: [],
@@ -110,11 +112,17 @@ export const useMapStore = create<MapState>((set, get) => ({
   }),
   
   updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => set(state => {
+    // id와 image_id가 모두 일치하는 어노테이션만 교체
     const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
-    const updated = annotations.map(a => a.id === ann.id ? ann : a);
+    const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
+    // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
+    if (type === 'pred') {
+      console.log('[updateAnnotation] predAnnotations(before):', annotations);
+      console.log('[updateAnnotation] predAnnotations(after):', updated);
+      console.log('[updateAnnotation] ann:', ann);
+    }
     const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
     newHistory.push({ type, annotations: updated });
-    
     return {
       ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
       editHistory: newHistory,
@@ -213,16 +221,29 @@ export const useMapStore = create<MapState>((set, get) => ({
         return collator.compare(pa, pb);
       });
       
-      // Store images in memory (like MOTA mode)
-      const mapImages: MapImage[] = imageFiles.map((file, idx) => ({
-        id: idx + 1,
-        name: file.name,
-        file: file,
-      }));
-      
+      // COCO GT/Pred json이 먼저 로드되어 있으면 file_name -> image_id 매핑 시도
+      let fileNameToImageId: Record<string, number> = {};
+      const gtAnns = get().gtAnnotations;
+      const predAnns = get().predAnnotations;
+      // GT/Pred 어노테이션에서 image_id -> file_name 매핑 추출 (COCO images 정보 필요)
+      // 실제로는 openMapGT/openMapPred에서 images 정보를 저장해두는 게 더 정확함
+      // 여기서는 file_name이 id로 쓰인 경우만 우선 지원
+      // 기본적으로 idx+1, file_name이 숫자면 그걸 id로 사용
+      const mapImages: MapImage[] = imageFiles.map((file, idx) => {
+        // 파일명에서 확장자 제거
+        const base = file.name.replace(/\.[^/.]+$/, "");
+        let id = idx + 1;
+        // 파일명이 숫자면 id로 사용
+        if (/^\d+$/.test(base)) {
+          id = parseInt(base, 10);
+        }
+        return {
+          id,
+          name: file.name,
+          file: file,
+        };
+      });
       get().setImages(mapImages);
-      
-      // Generate a pseudo folder ID for compatibility
       const folderId = `local_${Date.now()}`;
       alert(`이미지 폴더 로드 성공: ${imageFiles.length}개 이미지`);
       if (cb) cb(folderId);
@@ -243,6 +264,13 @@ export const useMapStore = create<MapState>((set, get) => ({
         
         // Parse COCO format annotations
         const annotations: Annotation[] = [];
+        let categories: { [id: number]: string } | undefined = undefined;
+        if (cocoData.categories && Array.isArray(cocoData.categories)) {
+          if (!categories) categories = {};
+          cocoData.categories.forEach((cat: any) => {
+            categories![cat.id] = cat.name;
+          });
+        }
         if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
           cocoData.annotations.forEach((ann: any) => {
             annotations.push({
@@ -255,8 +283,8 @@ export const useMapStore = create<MapState>((set, get) => ({
             });
           });
         }
-        
         get().setGT(annotations);
+        if (categories) set({ categories });
         const annotationId = `gt_${Date.now()}`;
         alert(`GT 로드 성공: ${annotations.length}개 annotations`);
         if (cb) cb(annotationId);
@@ -281,6 +309,13 @@ export const useMapStore = create<MapState>((set, get) => ({
         
         // Parse COCO format annotations
         const annotations: Annotation[] = [];
+        let categories: { [id: number]: string } | undefined = undefined;
+        if (cocoData.categories && Array.isArray(cocoData.categories)) {
+          if (!categories) categories = {};
+          cocoData.categories.forEach((cat: any) => {
+            categories![cat.id] = cat.name;
+          });
+        }
         if (Array.isArray(cocoData)) {
           // Array format (predictions only)
           cocoData.forEach((ann: any) => {
@@ -306,8 +341,8 @@ export const useMapStore = create<MapState>((set, get) => ({
             });
           });
         }
-        
         get().setPred(annotations);
+        if (categories) set({ categories });
         const annotationId = `pred_${Date.now()}`;
         alert(`Predictions 로드 성공: ${annotations.length}개 annotations`);
         if (cb) cb(annotationId);
