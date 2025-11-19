@@ -16,12 +16,21 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const resetMapCurrentFrame = useMapStore(s => s.resetCurrentFrame);
     const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
     const openMapFolder = () => openMapFolderStore(id => {
+      console.log('[TopBar] Folder upload callback - folderId:', id);
+      const storeImages = useMapStore.getState().images;
+      console.log('[TopBar] Images in store:', storeImages.length);
+      
       setFolderId(id);
+      console.log('[TopBar] setFolderId called with:', id);
+      
       // Get the first image's ID from the store (images are already loaded)
-      const firstImage = useMapStore.getState().images[0];
+      const firstImage = storeImages[0];
       if (firstImage) {
+        console.log('[TopBar] First image ID:', firstImage.id);
         setImageId(firstImage.id); // Select first image by its actual ID
         setCurrentImageIndex(0); // Set store index to 0
+      } else {
+        console.log('[TopBar] No first image found!');
       }
     });
     const openMapGT = () => openMapGTStore(id => {
