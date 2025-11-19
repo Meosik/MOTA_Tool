@@ -60,12 +60,10 @@ function MapPageInner() {
   const currentImage = images[currentImageIndex] || null;
   const imageUrl = currentImage ? (currentImage.url || URL.createObjectURL(currentImage.file)) : null;
   const currentImageId = currentImage?.id;
+  
+  // Filter by current image only - don't apply confidence/IoU filtering here
+  // Let InteractiveCanvas handle that based on slider values
   const filteredGt = currentImageId ? gtAnnotations.filter(ann => ann.image_id === currentImageId) : [];
-  // 디버깅: predAnnotations의 image_id와 currentImageId를 콘솔로 출력
-  if (currentImageId) {
-    console.log('[MapPage] currentImageId:', currentImageId);
-    console.log('[MapPage] predAnnotations image_ids:', predAnnotations.map(a => a.image_id));
-  }
   const filteredPred = currentImageId ? predAnnotations.filter(ann => ann.image_id === currentImageId) : [];
   return (
     <div className="h-full grid grid-cols-[16rem_1fr_20rem] min-h-0">

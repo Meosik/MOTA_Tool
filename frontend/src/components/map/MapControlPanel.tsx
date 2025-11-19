@@ -2,6 +2,29 @@ import React, { useState } from 'react'
 import { useMapMetrics } from '../../hooks/mapApi'
 import { useMapStore } from '../../store/mapStore'
 
+// Calculate IoU (Intersection over Union) between two bounding boxes
+function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
+  const [x1, y1, w1, h1] = box1;
+  const [x2, y2, w2, h2] = box2;
+  
+  // Calculate intersection
+  const xLeft = Math.max(x1, x2);
+  const yTop = Math.max(y1, y2);
+  const xRight = Math.min(x1 + w1, x2 + w2);
+  const yBottom = Math.min(y1 + h1, y2 + h2);
+  
+  if (xRight < xLeft || yBottom < yTop) {
+    return 0.0;  // No intersection
+  }
+  
+  const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+  const box1Area = w1 * h1;
+  const box2Area = w2 * h2;
+  const unionArea = box1Area + box2Area - intersectionArea;
+  
+  return unionArea > 0 ? intersectionArea / unionArea : 0.0;
+}
+
 interface MapControlPanelProps {
   projectId: string;
   annotationId: string | null;
@@ -38,7 +61,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId,
     console.log('MapControlPanel: Calculating stats for image', currentImage.id);
     console.log('MapControlPanel: Total GT', gtAnnotations.length, 'Total Pred', predAnnotations.length);
     
-    // More lenient filtering
+    // Filter GT for current image
     const gtForImage = gtAnnotations.filter(a => {
       // If no image_id, show for all images
       if (!a.image_id) return true;
@@ -46,11 +69,21 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId,
       return a.image_id === currentImage.id;
     });
     
+    // Filter pred annotations by image, confidence, and IoU
     const predForImage = predAnnotations.filter(a => {
-      // If no image_id, show for all images
-      if (!a.image_id) return true;
-      // Otherwise match current image and confidence threshold
-      return a.image_id === currentImage.id && (a.conf || 0) >= conf;
+      // Check image_id
+      if (a.image_id && a.image_id !== currentImage.id) return false;
+      
+      // Check confidence threshold
+      if ((a.conf || 0) < conf) return false;
+      
+      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
+      if (iou > 0 && gtForImage.length > 0) {
+        const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(a.bbox, gt.bbox)));
+        if (maxIoU < iou) return false;
+      }
+      
+      return true;
     });
     
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
@@ -61,7 +94,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId,
       imageName: currentImage.name,
       imageId: currentImage.id,
     };
-  }, [currentImage, gtAnnotations, predAnnotations, conf]);
+  }, [currentImage, gtAnnotations, predAnnotations, conf, iou]);
 
   // Slider adjustment utilities (matching MOTA RightPanel)
   const stepSmall = 0.01
