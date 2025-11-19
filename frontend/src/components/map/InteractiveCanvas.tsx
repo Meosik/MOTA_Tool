@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Annotation } from '../../types/annotation';
 import { useMapStore } from '../../store/mapStore';
+import { getCategoryIdByName, getCategoryNameById } from '../../constants/cocoCategories';
 
 interface InteractiveCanvasProps {
   imageUrl: string | null;
@@ -489,44 +490,61 @@ export default function InteractiveCanvas({
       </div>
       
       {/* Category Picker Modal */}
-      {showCategoryPicker && selectedAnnotation && (
-        <div 
-          className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
-          style={{ left: pickerPosition.x, top: pickerPosition.y }}
-        >
-          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO ID)</div>
-          <input
-            type="number"
-            autoFocus
-            className="w-full border border-gray-300 rounded px-2 py-1"
-            value={selectedAnnotation.category ?? ''}
-            onChange={(e) => {
-              const value = e.target.value;
-              if (value === '') {
-                handleCategoryChange(0);
-              } else {
-                const num = parseInt(value, 10);
-                if (!isNaN(num) && num >= 0) {
-                  handleCategoryChange(num);
+      {showCategoryPicker && selectedAnnotation && (() => {
+        const [inputValue, setInputValue] = useState(getCategoryNameById(selectedAnnotation.category as number) || '');
+        const [errorMsg, setErrorMsg] = useState('');
+        
+        const handleInputChange = (value: string) => {
+          setInputValue(value);
+          setErrorMsg('');  // Clear error when typing
+        };
+        
+        const handleSubmit = () => {
+          const categoryId = getCategoryIdByName(inputValue);
+          if (categoryId !== null) {
+            handleCategoryChange(categoryId);
+            setShowCategoryPicker(false);
+          } else {
+            setErrorMsg(`"${inputValue}"는 COCO 카테고리에 없습니다`);
+          }
+        };
+        
+        return (
+          <div 
+            className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
+            style={{ left: pickerPosition.x, top: pickerPosition.y }}
+          >
+            <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
+            <input
+              type="text"
+              autoFocus
+              className="w-full border border-gray-300 rounded px-2 py-1"
+              value={inputValue}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSubmit();
+                } else if (e.key === 'Escape') {
+                  setShowCategoryPicker(false);
                 }
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                setShowCategoryPicker(false);
-              } else if (e.key === 'Escape') {
-                setShowCategoryPicker(false);
-              }
-            }}
-            onBlur={() => setShowCategoryPicker(false)}
-            placeholder="Enter COCO category ID"
-            min="0"
-          />
-          <div className="text-xs text-gray-500 mt-1">
-            COCO 데이터셋 카테고리 ID (숫자) 입력
+              }}
+              onBlur={() => {
+                // Don't auto-submit on blur, just close
+                setTimeout(() => setShowCategoryPicker(false), 150);
+              }}
+              placeholder="예: person, car, dog"
+            />
+            {errorMsg && (
+              <div className="text-xs text-red-500 mt-1">
+                {errorMsg}
+              </div>
+            )}
+            <div className="text-xs text-gray-500 mt-1">
+              COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

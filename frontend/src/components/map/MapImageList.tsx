@@ -48,10 +48,14 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
           </div>
         ) : (
           <div className="space-y-1 p-2">
-            {filteredImages.map((image) => {
-              const thumbnailUrl = getImageUrl(image.id - 1); // id is 1-based, index is 0-based
+            {filteredImages.map((image, idx) => {
+              // Find the actual index of this image in the full images array
+              const actualIndex = images.findIndex(img => img.id === image.id);
+              const thumbnailUrl = actualIndex >= 0 ? getImageUrl(actualIndex) : null;
               const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
               const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
+              
+              console.log(`[MapImageList] Image ${image.id} (${image.name}): actualIndex=${actualIndex}, thumbnailUrl=${thumbnailUrl}`);
               
               return (
                 <button
