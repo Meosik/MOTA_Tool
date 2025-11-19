@@ -80,14 +80,43 @@ def get_tracks_compat(
     if cand_txt.exists():
         return _parse_mot_slice_from_file(cand_txt, f0, f1)
     if cand_json.exists():
-        # JSON 구조가 이미 {tracks:[...]}이면 그대로 리턴해도 되고,
-        # 다르면 필요 시 변환 로직 추가.
+        # COCO json 포맷을 image_id 기반으로 변환하여 반환
         try:
             import json
             with cand_json.open("r", encoding="utf-8") as fp:
-                data = json.load(fp)
-            # frames에 f,bbox가 들어있다면 그대로 사용
-            return data
+                coco_data = json.load(fp)
+            # COCO predictions: list or dict
+            if isinstance(coco_data, list):
+                # predictions only (list)
+                tracks = {}
+                for ann in coco_data:
+                    tid = ann.get("id", 0)
+                    image_id = ann.get("image_id")
+                    frame = image_id
+                    box = ann.get("bbox", [0,0,0,0])
+                    conf = ann.get("score", 1.0)
+                    tracks.setdefault(tid, []).append({"f": frame, "bbox": box, "conf": conf})
+                out = {"tracks": [
+                    {"id": k, "frames": sorted(v, key=lambda a: a["f"])} for k, v in sorted(tracks.items())
+                ]}
+                return out
+            elif isinstance(coco_data, dict) and "annotations" in coco_data:
+                # full COCO format
+                tracks = {}
+                for ann in coco_data["annotations"]:
+                    tid = ann.get("id", 0)
+                    image_id = ann.get("image_id")
+                    frame = image_id
+                    box = ann.get("bbox", [0,0,0,0])
+                    conf = ann.get("score", 1.0)
+                    tracks.setdefault(tid, []).append({"f": frame, "bbox": box, "conf": conf})
+                out = {"tracks": [
+                    {"id": k, "frames": sorted(v, key=lambda a: a["f"])} for k, v in sorted(tracks.items())
+                ]}
+                return out
+            else:
+                # 이미 {tracks:[...]} 구조면 그대로 반환
+                return coco_data
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"failed to parse json: {e}")
 

@@ -11,21 +11,38 @@ router = APIRouter()
 
 @router.post("/images/folder")
 async def upload_image_folder(images: List[UploadFile] = File(...)):
-    """Upload a folder of images for MAP mode."""
+    """Upload a folder of images for MAP mode.
+    
+    Supports large batches of images (configurable via multipart settings).
+    """
+    if not images:
+        raise HTTPException(status_code=400, detail="No images provided")
+    
     folder_id = str(uuid.uuid4())
     save_dir = settings.DATA_ROOT / "images" / folder_id
     save_dir.mkdir(parents=True, exist_ok=True)
     
     image_list = []
     for idx, img in enumerate(images):
-        dest = save_dir / img.filename
-        with dest.open("wb") as f:
-            shutil.copyfileobj(img.file, f)
-        image_list.append({
-            'id': idx + 1,
-            'file_name': img.filename,
-            'path': str(dest)
-        })
+        # Handle filename: use only the basename, replace path separators
+        filename = img.filename or f"image_{idx}.jpg"
+        # Replace path separators to avoid directory issues
+        filename = filename.replace('\\', '_').replace('/', '_')
+        
+        dest = save_dir / filename
+        # Ensure parent directory exists (in case of nested paths)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with dest.open("wb") as f:
+                shutil.copyfileobj(img.file, f)
+            image_list.append({
+                'id': idx + 1,
+                'file_name': filename,
+                'path': str(dest)
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save image {filename}: {str(e)}")
     
     # Save image list metadata
     metadata_path = save_dir / "images.json"

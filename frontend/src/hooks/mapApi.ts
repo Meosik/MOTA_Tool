@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { API_BASE } from '../lib/api';
 
 // Get image list from folder
 export function useMapImages(folderId: string | null | undefined) {
@@ -6,7 +7,7 @@ export function useMapImages(folderId: string | null | undefined) {
     queryKey: ['map-images', folderId],
     queryFn: async () => {
       if (!folderId) return [];
-      const res = await fetch(`/images/${folderId}`);
+      const res = await fetch(`${API_BASE}/images/${folderId}`);
       if (!res.ok) throw new Error('Failed to fetch images');
       return res.json();
     },
@@ -20,7 +21,7 @@ export function useImageAnnotations(annotationId: string | null | undefined) {
     queryKey: ['map-image-annotations', annotationId],
     queryFn: async () => {
       if (!annotationId) return { gt: [], pred: [], imageInfo: {} };
-      const res = await fetch(`/tracks?annotation_id=${annotationId}`);
+      const res = await fetch(`${API_BASE}/tracks?annotation_id=${annotationId}`);
       if (!res.ok) throw new Error('Failed to fetch annotations');
       return res.json();
     },
@@ -40,7 +41,7 @@ export function useMapMetrics(gtId: string, predId: string, conf: number, iou: n
         conf: String(conf),
         iou: String(iou)
       });
-      const res = await fetch(`/map/calculate?${params.toString()}`);
+      const res = await fetch(`${API_BASE}/map/calculate?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to calculate mAP');
       return res.json();
     },
@@ -54,7 +55,7 @@ export function useUpdateAnnotation() {
   return useMutation<any, Error, any, unknown>({
     mutationFn: async (vars: any) => {
       const { annotationId, data } = vars;
-      const res = await fetch(`/annotations/${annotationId}`, {
+      const res = await fetch(`${API_BASE}/annotations/${annotationId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)

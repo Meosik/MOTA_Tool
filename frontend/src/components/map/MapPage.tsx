@@ -1,6 +1,6 @@
 import { MapProvider, useMapContext } from './MapContext';
 import MapImageSidebar from './MapImageSidebar';
-import MapImageCanvas from './MapImageCanvas';
+import InteractiveCanvas from './InteractiveCanvas';
 import MapControlPanel from './MapControlPanel';
 import React, { useState, useCallback } from 'react';
 
@@ -12,12 +12,12 @@ export default function MapPage() {
   );
 }
 
+import { useMapStore } from '../../store/mapStore';
+
 function MapPageInner() {
-  const { projectId, imageId, setImageId } = useMapContext();
+  const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
+  const { setCurrentImageIndex, undo, redo, canUndo, canRedo, gtAnnotations, predAnnotations, categories, images, currentImageIndex, updateAnnotation } = useMapStore();
   const [annotationIdList, setAnnotationIdList] = useState<string[]>([]);
-  const [folderId, setFolderId] = useState<string | null>(null);
-  const [gtId, setGtId] = useState<string | null>(null);
-  const [predId, setPredId] = useState<string | null>(null);
   const annotationId = imageId ? String(imageId) : null;
 
   // Keyboard shortcuts for undo/redo
@@ -25,22 +25,23 @@ function MapPageInner() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
-        // Undo handled by store if needed
+        if (canUndo()) undo();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
-        // Redo handled by store if needed
+        if (canRedo()) redo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [undo, redo, canUndo, canRedo]);
 
   // Handle folder upload success
   const handleFolderUpload = useCallback((id: string) => {
     setFolderId(id);
-    // Optionally select first image
+    // Select first image
     setImageId(1);
-  }, [setImageId]);
+    setCurrentImageIndex(0);
+  }, [setFolderId, setImageId, setCurrentImageIndex]);
 
   // Handle annotation upload success
   const handleUploadSuccess = useCallback((id: string) => {
@@ -50,8 +51,20 @@ function MapPageInner() {
 
   const handleImageSelect = useCallback((imgId: number) => {
     setImageId(imgId);
-  }, [setImageId]);
+    // Update mapStore index (imgId is 1-based, index is 0-based)
+    setCurrentImageIndex(imgId - 1);
+  }, [setImageId, setCurrentImageIndex]);
 
+  const currentImage = images[currentImageIndex] || null;
+  const imageUrl = currentImage ? (currentImage.url || URL.createObjectURL(currentImage.file)) : null;
+  const currentImageId = currentImage?.id;
+  const filteredGt = currentImageId ? gtAnnotations.filter(ann => ann.image_id === currentImageId) : [];
+  // 디버깅: predAnnotations의 image_id와 currentImageId를 콘솔로 출력
+  if (currentImageId) {
+    console.log('[MapPage] currentImageId:', currentImageId);
+    console.log('[MapPage] predAnnotations image_ids:', predAnnotations.map(a => a.image_id));
+  }
+  const filteredPred = currentImageId ? predAnnotations.filter(ann => ann.image_id === currentImageId) : [];
   return (
     <div className="h-full grid grid-cols-[16rem_1fr_20rem] min-h-0">
       <MapImageSidebar
@@ -65,11 +78,17 @@ function MapPageInner() {
         onImageSelect={handleImageSelect}
       />
       <div className="min-h-0 min-w-0 flex flex-col">
-        <MapImageCanvas 
-          annotationId={annotationId}
-          gtAnnotationId={gtId}
-          predAnnotationId={predId}
-          interactive={true}
+        <InteractiveCanvas
+          imageUrl={imageUrl}
+          gtAnnotations={filteredGt}
+          predAnnotations={filteredPred}
+          visibleCategories={new Set()}
+          confidenceThreshold={0}
+          onAnnotationUpdate={ann => {
+            if (!currentImageId) return;
+            updateAnnotation({ ...ann, image_id: currentImageId }, 'pred');
+          }}
+          categories={categories ? Object.fromEntries(Object.entries(categories).map(([id, name]) => [id, { name }])) : {}}
         />
       </div>
       <MapControlPanel 
