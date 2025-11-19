@@ -11,11 +11,18 @@ interface MapState {
   
   gtAnnotations: Annotation[];
   predAnnotations: Annotation[];
+  originalPredAnnotations: Annotation[];  // Store original pred annotations for reset
   categories?: { [id: number]: string };
   undoStack: Annotation[][];
   redoStack: Annotation[][];
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
   historyIndex: number;
+  
+  // Threshold values (like MOTA mode)
+  iou: number;
+  conf: number;
+  setIou: (v: number) => void;
+  setConf: (v: number) => void;
   
   setImages: (images: MapImage[]) => void;
   setCurrentImageIndex: (index: number) => void;
@@ -30,6 +37,7 @@ interface MapState {
   canUndo: () => boolean;
   canRedo: () => boolean;
   reset: () => void;
+  resetCurrentFrame: () => void;  // New: reset only current frame
   openMapFolder: (cb?: (folderId: string) => void) => void;
   openMapGT: (cb?: (annotationId: string) => void) => void;
   openMapPred: (cb?: (annotationId: string) => void) => void;
@@ -62,11 +70,18 @@ export const useMapStore = create<MapState>((set, get) => ({
   currentImageIndex: 0,
   gtAnnotations: [],
   predAnnotations: [],
+  originalPredAnnotations: [],
   categories: undefined,
   undoStack: [],
   redoStack: [],
   editHistory: [],
   historyIndex: -1,
+  
+  // Threshold values (matching MOTA mode defaults)
+  iou: 0.5,
+  conf: 0.0,
+  setIou: (v) => set({ iou: v }),
+  setConf: (v) => set({ conf: v }),
   
   setImages: (images) => {
     clearUrlCache();
@@ -104,6 +119,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     newHistory.push({ type: 'pred', annotations: anns });
     return {
       predAnnotations: anns,
+      originalPredAnnotations: anns,  // Store original for reset functionality
       editHistory: newHistory,
       historyIndex: newHistory.length - 1,
       undoStack: [...state.undoStack, state.predAnnotations],
@@ -117,9 +133,11 @@ export const useMapStore = create<MapState>((set, get) => ({
     const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
     // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
     if (type === 'pred') {
-      console.log('[updateAnnotation] predAnnotations(before):', annotations);
-      console.log('[updateAnnotation] predAnnotations(after):', updated);
-      console.log('[updateAnnotation] ann:', ann);
+      console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
+      console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
+      const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
+      console.log('[updateAnnotation] Number of annotations changed:', changedCount);
+      console.log('[updateAnnotation] Total predictions:', annotations.length);
     }
     const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
     newHistory.push({ type, annotations: updated });
@@ -182,6 +200,45 @@ export const useMapStore = create<MapState>((set, get) => ({
       redoStack: [],
     };
   }),
+  
+  resetCurrentFrame: () => set(state => {
+    const currentImage = state.images[state.currentImageIndex];
+    if (!currentImage) {
+      console.log('[resetCurrentFrame] No current image found');
+      return state;
+    }
+    
+    const currentImageId = currentImage.id;
+    console.log('[resetCurrentFrame] Current image ID:', currentImageId);
+    console.log('[resetCurrentFrame] Total pred annotations:', state.predAnnotations.length);
+    console.log('[resetCurrentFrame] Total original pred annotations:', state.originalPredAnnotations.length);
+    
+    // Get original pred annotations for current frame
+    const originalForCurrentFrame = state.originalPredAnnotations.filter(
+      ann => ann.image_id === currentImageId
+    );
+    console.log('[resetCurrentFrame] Original annotations for current frame:', originalForCurrentFrame.length);
+    
+    // Get current pred annotations for other frames
+    const otherFramePreds = state.predAnnotations.filter(
+      ann => ann.image_id !== currentImageId
+    );
+    console.log('[resetCurrentFrame] Pred annotations for other frames:', otherFramePreds.length);
+    
+    // Combine: original annotations for current frame + unchanged annotations for other frames
+    const resetPredAnnotations = [...otherFramePreds, ...originalForCurrentFrame];
+    console.log('[resetCurrentFrame] Total after reset:', resetPredAnnotations.length);
+    
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type: 'pred', annotations: resetPredAnnotations });
+    
+    return {
+      predAnnotations: resetPredAnnotations,
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
+    };
+  }),
+  
   openMapFolder: (cb?: (folderId: string) => void) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -272,9 +329,9 @@ export const useMapStore = create<MapState>((set, get) => ({
           });
         }
         if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
-          cocoData.annotations.forEach((ann: any) => {
+          cocoData.annotations.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `gt_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],
@@ -318,9 +375,9 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         if (Array.isArray(cocoData)) {
           // Array format (predictions only)
-          cocoData.forEach((ann: any) => {
+          cocoData.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `pred_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],
@@ -330,9 +387,9 @@ export const useMapStore = create<MapState>((set, get) => ({
           });
         } else if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
           // Full COCO format
-          cocoData.annotations.forEach((ann: any) => {
+          cocoData.annotations.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `pred_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],

@@ -1,5 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Annotation } from '../../types/annotation';
+import { useMapStore } from '../../store/mapStore';
+import { getCategoryIdByName, getCategoryNameById } from '../../constants/cocoCategories';
 
 interface InteractiveCanvasProps {
   imageUrl: string | null;
@@ -7,8 +9,32 @@ interface InteractiveCanvasProps {
   predAnnotations: Annotation[];
   visibleCategories: Set<number>;
   confidenceThreshold: number;
+  iouThreshold?: number;
   onAnnotationUpdate?: (annotation: Annotation) => void;
   categories?: Record<number, { name: string; color?: string }>;
+}
+
+// Calculate IoU (Intersection over Union) between two bounding boxes
+function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
+  const [x1, y1, w1, h1] = box1;
+  const [x2, y2, w2, h2] = box2;
+  
+  // Calculate intersection
+  const xLeft = Math.max(x1, x2);
+  const yTop = Math.max(y1, y2);
+  const xRight = Math.min(x1 + w1, x2 + w2);
+  const yBottom = Math.min(y1 + h1, y2 + h2);
+  
+  if (xRight < xLeft || yBottom < yTop) {
+    return 0.0;  // No intersection
+  }
+  
+  const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+  const box1Area = w1 * h1;
+  const box2Area = w2 * h2;
+  const unionArea = box1Area + box2Area - intersectionArea;
+  
+  return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
@@ -16,6 +42,7 @@ type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
 type DragState = {
   active: boolean;
   annotation: Annotation | null;
+  annotationIndex: number;  // Index in predAnnotations array
   startX: number;
   startY: number;
   handle: 'move' | ResizeHandle | null;
@@ -32,15 +59,20 @@ export default function InteractiveCanvas({
   predAnnotations,
   visibleCategories,
   confidenceThreshold,
+  iouThreshold = 0.0,
   onAnnotationUpdate,
   categories = {}
 }: InteractiveCanvasProps) {
+  // Read thresholds from store (like MOTA mode's OverlayCanvas)
+  const iouThr = useMapStore(s => s.iou);
+  const confThr = useMapStore(s => s.conf);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [dragState, setDragState] = useState<DragState>({
     active: false,
     annotation: null,
+    annotationIndex: -1,
     startX: 0,
     startY: 0,
     handle: null
@@ -50,6 +82,8 @@ export default function InteractiveCanvas({
   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
+  const [categoryInputValue, setCategoryInputValue] = useState('');
+  const [categoryErrorMsg, setCategoryErrorMsg] = useState('');
 
   const getCategoryColor = (categoryId: number | undefined, isGt: boolean) => {
     if (isGt) return '#22c55e'; // Green for GT
@@ -84,15 +118,35 @@ export default function InteractiveCanvas({
     ctx.drawImage(img, 0, 0);
     ctx.restore();
 
-    // Filter and draw annotations
-    const filteredPred = predAnnotations.filter(ann => 
-      (ann.conf ?? 1) >= confidenceThreshold &&
-      (visibleCategories.size === 0 || visibleCategories.has(ann.category as any))
-    );
+    // If dragging, replace the annotation being dragged with the updated version from dragState
+    let predToRender = predAnnotations;
+    if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
+      predToRender = predAnnotations.map((ann, idx) => 
+        idx === dragState.annotationIndex ? dragState.annotation! : ann
+      );
+    }
 
+    // Filter GT annotations
     const filteredGt = gtAnnotations.filter(ann =>
       visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
     );
+
+    // Filter pred annotations by confidence and IoU (using store values like MOTA mode)
+    const filteredPred = predToRender.filter(ann => {
+      // Check confidence threshold from store
+      if ((ann.conf ?? 1) < confThr) return false;
+      
+      // Check visible categories
+      if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
+      
+      // Check IoU threshold from store - pred must have IoU >= threshold with at least one GT box
+      if (iouThr > 0 && filteredGt.length > 0) {
+        const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
+        if (maxIoU < iouThr) return false;
+      }
+      
+      return true;
+    });
 
     const allAnnotations = [...filteredGt, ...filteredPred];
     
@@ -152,7 +206,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, scale, offset, selectedAnnotation, categories]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {
@@ -201,7 +255,7 @@ export default function InteractiveCanvas({
     };
   };
 
-  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; handle: 'move' | ResizeHandle } | null => {
+  const findAnnotationAt = (x: number, y: number): { annotation: Annotation; index: number; handle: 'move' | ResizeHandle } | null => {
     const imgCoords = canvasToImageCoords(x, y);
     const handleSize = 10; // Detection area for handles
     
@@ -212,35 +266,35 @@ export default function InteractiveCanvas({
       
       // Check corner handles first
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 'tl' }; // Top-left
+        return { annotation: ann, index: i, handle: 'tl' }; // Top-left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 'tr' }; // Top-right
+        return { annotation: ann, index: i, handle: 'tr' }; // Top-right
       }
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'bl' }; // Bottom-left
+        return { annotation: ann, index: i, handle: 'bl' }; // Bottom-left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'br' }; // Bottom-right
+        return { annotation: ann, index: i, handle: 'br' }; // Bottom-right
       }
       
       // Check edge handles
       if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - by) < handleSize) {
-        return { annotation: ann, handle: 't' }; // Top
+        return { annotation: ann, index: i, handle: 't' }; // Top
       }
       if (Math.abs(imgCoords.x - (bx + bw/2)) < handleSize && Math.abs(imgCoords.y - (by + bh)) < handleSize) {
-        return { annotation: ann, handle: 'b' }; // Bottom
+        return { annotation: ann, index: i, handle: 'b' }; // Bottom
       }
       if (Math.abs(imgCoords.x - bx) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
-        return { annotation: ann, handle: 'l' }; // Left
+        return { annotation: ann, index: i, handle: 'l' }; // Left
       }
       if (Math.abs(imgCoords.x - (bx + bw)) < handleSize && Math.abs(imgCoords.y - (by + bh/2)) < handleSize) {
-        return { annotation: ann, handle: 'r' }; // Right
+        return { annotation: ann, index: i, handle: 'r' }; // Right
       }
       
       // Check if inside bbox
       if (imgCoords.x >= bx && imgCoords.x <= bx + bw && imgCoords.y >= by && imgCoords.y <= by + bh) {
-        return { annotation: ann, handle: 'move' };
+        return { annotation: ann, index: i, handle: 'move' };
       }
     }
     
@@ -259,6 +313,7 @@ export default function InteractiveCanvas({
       setDragState({
         active: true,
         annotation: hit.annotation,
+        annotationIndex: hit.index,
         startX: x,
         startY: y,
         handle: hit.handle
@@ -283,6 +338,9 @@ export default function InteractiveCanvas({
       // Show category picker for the selected annotation
       setSelectedAnnotation(hit.annotation);
       setPickerPosition({ x: e.clientX, y: e.clientY });
+      // Initialize input value with current category name
+      setCategoryInputValue(getCategoryNameById(hit.annotation.category as number) || '');
+      setCategoryErrorMsg('');
       setShowCategoryPicker(true);
       e.preventDefault();
     }
@@ -383,6 +441,7 @@ export default function InteractiveCanvas({
     setDragState({
       active: false,
       annotation: null,
+      annotationIndex: -1,
       startX: 0,
       startY: 0,
       handle: null
@@ -438,25 +497,45 @@ export default function InteractiveCanvas({
       {/* Category Picker Modal */}
       {showCategoryPicker && selectedAnnotation && (
         <div 
-          className="fixed bg-white border border-gray-300 rounded shadow-lg p-2 z-50"
+          className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
           style={{ left: pickerPosition.x, top: pickerPosition.y }}
         >
-          <div className="text-sm font-semibold mb-2">카테고리 선택</div>
-          <select
+          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
+          <input
+            type="text"
             autoFocus
             className="w-full border border-gray-300 rounded px-2 py-1"
-            value={selectedAnnotation.category}
-            onChange={(e) => handleCategoryChange(Number(e.target.value))}
-            onBlur={() => setShowCategoryPicker(false)}
-          >
-            {Object.entries(categories).map(([id, cat]) => (
-              <option key={id} value={id}>
-                {cat.name}
-              </option>
-            ))}
-          </select>
+            value={categoryInputValue}
+            onChange={(e) => {
+              setCategoryInputValue(e.target.value);
+              setCategoryErrorMsg('');  // Clear error when typing
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const categoryId = getCategoryIdByName(categoryInputValue);
+                if (categoryId !== null) {
+                  handleCategoryChange(categoryId);
+                  setShowCategoryPicker(false);
+                } else {
+                  setCategoryErrorMsg(`"${categoryInputValue}"는 COCO 카테고리에 없습니다`);
+                }
+              } else if (e.key === 'Escape') {
+                setShowCategoryPicker(false);
+              }
+            }}
+            onBlur={() => {
+              // Don't auto-submit on blur, just close
+              setTimeout(() => setShowCategoryPicker(false), 150);
+            }}
+            placeholder="예: person, car, dog"
+          />
+          {categoryErrorMsg && (
+            <div className="text-xs text-red-500 mt-1">
+              {categoryErrorMsg}
+            </div>
+          )}
           <div className="text-xs text-gray-500 mt-1">
-            더블클릭으로 카테고리 변경
+            COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
           </div>
         </div>
       )}

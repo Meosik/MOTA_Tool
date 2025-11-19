@@ -8,13 +8,22 @@ interface MapImageListProps {
 }
 
 export default function MapImageList({ folderId, currentImageId, onImageSelect }: MapImageListProps) {
-  const { images, getImageUrl, gtAnnotations, predAnnotations } = useMapStore();
+  // Use individual selectors to ensure proper reactivity
+  const images = useMapStore(s => s.images);
+  const getImageUrl = useMapStore(s => s.getImageUrl);
+  const gtAnnotations = useMapStore(s => s.gtAnnotations);
+  const predAnnotations = useMapStore(s => s.predAnnotations);
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Debug logging - log whenever component renders
+  console.log('[MapImageList] RENDER - folderId:', folderId, 'images.length:', images.length, 'currentImageId:', currentImageId);
+  console.log('[MapImageList] images array:', images);
+
   if (!folderId || images.length === 0) {
+    console.log('[MapImageList] Showing placeholder - folderId:', folderId, 'images.length:', images.length);
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        Upload images to get started
+        {!folderId ? 'TopBar에서 이미지 폴더를 업로드하세요' : 'Upload images to get started'}
       </div>
     );
   }
@@ -44,10 +53,14 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
           </div>
         ) : (
           <div className="space-y-1 p-2">
-            {filteredImages.map((image) => {
-              const thumbnailUrl = getImageUrl(image.id - 1); // id is 1-based, index is 0-based
+            {filteredImages.map((image, idx) => {
+              // Find the actual index of this image in the full images array
+              const actualIndex = images.findIndex(img => img.id === image.id);
+              const thumbnailUrl = actualIndex >= 0 ? getImageUrl(actualIndex) : null;
               const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
               const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
+              
+              console.log(`[MapImageList] Image ${image.id} (${image.name}): actualIndex=${actualIndex}, thumbnailUrl=${thumbnailUrl}`);
               
               return (
                 <button
