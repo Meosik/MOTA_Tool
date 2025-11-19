@@ -272,9 +272,9 @@ export const useMapStore = create<MapState>((set, get) => ({
           });
         }
         if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
-          cocoData.annotations.forEach((ann: any) => {
+          cocoData.annotations.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `gt_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],
@@ -318,9 +318,9 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         if (Array.isArray(cocoData)) {
           // Array format (predictions only)
-          cocoData.forEach((ann: any) => {
+          cocoData.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `pred_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],
@@ -330,9 +330,9 @@ export const useMapStore = create<MapState>((set, get) => ({
           });
         } else if (cocoData.annotations && Array.isArray(cocoData.annotations)) {
           // Full COCO format
-          cocoData.annotations.forEach((ann: any) => {
+          cocoData.annotations.forEach((ann: any, idx: number) => {
             annotations.push({
-              id: ann.id,
+              id: ann.id !== undefined ? ann.id : `pred_${idx}`,  // Generate ID if missing
               image_id: ann.image_id,
               category: ann.category_id || 1,
               bbox: ann.bbox || [0, 0, 0, 0],
