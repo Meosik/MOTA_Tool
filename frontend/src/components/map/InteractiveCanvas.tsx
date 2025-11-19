@@ -82,6 +82,8 @@ export default function InteractiveCanvas({
   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
+  const [categoryInputValue, setCategoryInputValue] = useState('');
+  const [categoryErrorMsg, setCategoryErrorMsg] = useState('');
 
   const getCategoryColor = (categoryId: number | undefined, isGt: boolean) => {
     if (isGt) return '#22c55e'; // Green for GT
@@ -336,6 +338,9 @@ export default function InteractiveCanvas({
       // Show category picker for the selected annotation
       setSelectedAnnotation(hit.annotation);
       setPickerPosition({ x: e.clientX, y: e.clientY });
+      // Initialize input value with current category name
+      setCategoryInputValue(getCategoryNameById(hit.annotation.category as number) || '');
+      setCategoryErrorMsg('');
       setShowCategoryPicker(true);
       e.preventDefault();
     }
@@ -490,61 +495,50 @@ export default function InteractiveCanvas({
       </div>
       
       {/* Category Picker Modal */}
-      {showCategoryPicker && selectedAnnotation && (() => {
-        const [inputValue, setInputValue] = useState(getCategoryNameById(selectedAnnotation.category as number) || '');
-        const [errorMsg, setErrorMsg] = useState('');
-        
-        const handleInputChange = (value: string) => {
-          setInputValue(value);
-          setErrorMsg('');  // Clear error when typing
-        };
-        
-        const handleSubmit = () => {
-          const categoryId = getCategoryIdByName(inputValue);
-          if (categoryId !== null) {
-            handleCategoryChange(categoryId);
-            setShowCategoryPicker(false);
-          } else {
-            setErrorMsg(`"${inputValue}"는 COCO 카테고리에 없습니다`);
-          }
-        };
-        
-        return (
-          <div 
-            className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
-            style={{ left: pickerPosition.x, top: pickerPosition.y }}
-          >
-            <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
-            <input
-              type="text"
-              autoFocus
-              className="w-full border border-gray-300 rounded px-2 py-1"
-              value={inputValue}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleSubmit();
-                } else if (e.key === 'Escape') {
+      {showCategoryPicker && selectedAnnotation && (
+        <div 
+          className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
+          style={{ left: pickerPosition.x, top: pickerPosition.y }}
+        >
+          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
+          <input
+            type="text"
+            autoFocus
+            className="w-full border border-gray-300 rounded px-2 py-1"
+            value={categoryInputValue}
+            onChange={(e) => {
+              setCategoryInputValue(e.target.value);
+              setCategoryErrorMsg('');  // Clear error when typing
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const categoryId = getCategoryIdByName(categoryInputValue);
+                if (categoryId !== null) {
+                  handleCategoryChange(categoryId);
                   setShowCategoryPicker(false);
+                } else {
+                  setCategoryErrorMsg(`"${categoryInputValue}"는 COCO 카테고리에 없습니다`);
                 }
-              }}
-              onBlur={() => {
-                // Don't auto-submit on blur, just close
-                setTimeout(() => setShowCategoryPicker(false), 150);
-              }}
-              placeholder="예: person, car, dog"
-            />
-            {errorMsg && (
-              <div className="text-xs text-red-500 mt-1">
-                {errorMsg}
-              </div>
-            )}
-            <div className="text-xs text-gray-500 mt-1">
-              COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
+              } else if (e.key === 'Escape') {
+                setShowCategoryPicker(false);
+              }
+            }}
+            onBlur={() => {
+              // Don't auto-submit on blur, just close
+              setTimeout(() => setShowCategoryPicker(false), 150);
+            }}
+            placeholder="예: person, car, dog"
+          />
+          {categoryErrorMsg && (
+            <div className="text-xs text-red-500 mt-1">
+              {categoryErrorMsg}
             </div>
+          )}
+          <div className="text-xs text-gray-500 mt-1">
+            COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
           </div>
-        );
-      })()}
+        </div>
+      )}
     </div>
   );
 }
