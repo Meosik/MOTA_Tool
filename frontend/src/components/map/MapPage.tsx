@@ -1,20 +1,11 @@
-import { MapProvider, useMapContext } from './MapContext';
+import { useMapContext } from './MapContext';
 import MapImageSidebar from './MapImageSidebar';
 import InteractiveCanvas from './InteractiveCanvas';
 import MapControlPanel from './MapControlPanel';
 import React, { useState, useCallback } from 'react';
-
-export default function MapPage() {
-  return (
-    <MapProvider>
-      <MapPageInner />
-    </MapProvider>
-  );
-}
-
 import { useMapStore } from '../../store/mapStore';
 
-function MapPageInner() {
+export default function MapPage() {
   const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
   const { setCurrentImageIndex, undo, redo, canUndo, canRedo, gtAnnotations, predAnnotations, categories, images, currentImageIndex, updateAnnotation } = useMapStore();
   const [annotationIdList, setAnnotationIdList] = useState<string[]>([]);
