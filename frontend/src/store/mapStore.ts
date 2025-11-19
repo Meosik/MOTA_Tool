@@ -11,6 +11,7 @@ interface MapState {
   
   gtAnnotations: Annotation[];
   predAnnotations: Annotation[];
+  originalPredAnnotations: Annotation[];  // Store original pred annotations for reset
   categories?: { [id: number]: string };
   undoStack: Annotation[][];
   redoStack: Annotation[][];
@@ -30,6 +31,7 @@ interface MapState {
   canUndo: () => boolean;
   canRedo: () => boolean;
   reset: () => void;
+  resetCurrentFrame: () => void;  // New: reset only current frame
   openMapFolder: (cb?: (folderId: string) => void) => void;
   openMapGT: (cb?: (annotationId: string) => void) => void;
   openMapPred: (cb?: (annotationId: string) => void) => void;
@@ -62,6 +64,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   currentImageIndex: 0,
   gtAnnotations: [],
   predAnnotations: [],
+  originalPredAnnotations: [],
   categories: undefined,
   undoStack: [],
   redoStack: [],
@@ -104,6 +107,7 @@ export const useMapStore = create<MapState>((set, get) => ({
     newHistory.push({ type: 'pred', annotations: anns });
     return {
       predAnnotations: anns,
+      originalPredAnnotations: anns,  // Store original for reset functionality
       editHistory: newHistory,
       historyIndex: newHistory.length - 1,
       undoStack: [...state.undoStack, state.predAnnotations],
@@ -184,6 +188,36 @@ export const useMapStore = create<MapState>((set, get) => ({
       redoStack: [],
     };
   }),
+  
+  resetCurrentFrame: () => set(state => {
+    const currentImage = state.images[state.currentImageIndex];
+    if (!currentImage) return state;
+    
+    const currentImageId = currentImage.id;
+    
+    // Get original pred annotations for current frame
+    const originalForCurrentFrame = state.originalPredAnnotations.filter(
+      ann => ann.image_id === currentImageId
+    );
+    
+    // Get current pred annotations for other frames
+    const otherFramePreds = state.predAnnotations.filter(
+      ann => ann.image_id !== currentImageId
+    );
+    
+    // Combine: original annotations for current frame + unchanged annotations for other frames
+    const resetPredAnnotations = [...otherFramePreds, ...originalForCurrentFrame];
+    
+    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+    newHistory.push({ type: 'pred', annotations: resetPredAnnotations });
+    
+    return {
+      predAnnotations: resetPredAnnotations,
+      editHistory: newHistory,
+      historyIndex: newHistory.length - 1,
+    };
+  }),
+  
   openMapFolder: (cb?: (folderId: string) => void) => {
     const input = document.createElement('input');
     input.type = 'file';

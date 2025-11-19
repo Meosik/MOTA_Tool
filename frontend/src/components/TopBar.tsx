@@ -12,7 +12,7 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const exportMapPred = useMapStore(s => s.exportMapPred);
     const undoMap = useMapStore(s => s.undo);
     const redoMap = useMapStore(s => s.redo);
-    const resetMap = useMapStore(s => s.reset);
+    const resetMapCurrentFrame = useMapStore(s => s.resetCurrentFrame);
     const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
     const openMapFolder = () => openMapFolderStore(id => {
       setFolderId(id);
@@ -24,7 +24,7 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const openMapPred = () => openMapPredStore(id => {
       setPredId(id);
     });
-    return { openMapFolder, openMapGT, openMapPred, exportMapPred, undoMap, redoMap, resetMap };
+    return { openMapFolder, openMapGT, openMapPred, exportMapPred, undoMap, redoMap, resetMapCurrentFrame };
   } else {
     // MOTA 모드에서는 더미 핸들러 반환
     const dummy = () => {};
@@ -35,7 +35,7 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
       exportMapPred: dummy,
       undoMap: dummy,
       redoMap: dummy,
-      resetMap: dummy,
+      resetMapCurrentFrame: dummy,
     };
   }
 }
@@ -50,7 +50,7 @@ export default function TopBar() {
   // MAP 모드용 핸들러 (mode 전달)
   const {
     openMapFolder, openMapGT, openMapPred, exportMapPred,
-    undoMap, redoMap, resetMap
+    undoMap, redoMap, resetMapCurrentFrame
   } = useMapModeHandlers(mode);
 
   // 모드별로 모든 핸들러 분기
@@ -60,7 +60,7 @@ export default function TopBar() {
   const handleExport     = mode === 'MOTA' ? exportModifiedPred: exportMapPred;
   const handleUndo       = mode === 'MOTA' ? undo              : undoMap;
   const handleRedo       = mode === 'MOTA' ? redo              : redoMap;
-  const handleResetFrame = mode === 'MOTA' ? resetCurrentFrame : resetMap;
+  const handleResetFrame = mode === 'MOTA' ? resetCurrentFrame : resetMapCurrentFrame;
 
   return (
     <div className="h-12 flex items-center gap-2 px-3 border-b bg-white text-sm">

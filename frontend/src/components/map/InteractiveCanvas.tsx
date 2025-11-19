@@ -7,8 +7,32 @@ interface InteractiveCanvasProps {
   predAnnotations: Annotation[];
   visibleCategories: Set<number>;
   confidenceThreshold: number;
+  iouThreshold?: number;
   onAnnotationUpdate?: (annotation: Annotation) => void;
   categories?: Record<number, { name: string; color?: string }>;
+}
+
+// Calculate IoU (Intersection over Union) between two bounding boxes
+function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
+  const [x1, y1, w1, h1] = box1;
+  const [x2, y2, w2, h2] = box2;
+  
+  // Calculate intersection
+  const xLeft = Math.max(x1, x2);
+  const yTop = Math.max(y1, y2);
+  const xRight = Math.min(x1 + w1, x2 + w2);
+  const yBottom = Math.min(y1 + h1, y2 + h2);
+  
+  if (xRight < xLeft || yBottom < yTop) {
+    return 0.0;  // No intersection
+  }
+  
+  const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+  const box1Area = w1 * h1;
+  const box2Area = w2 * h2;
+  const unionArea = box1Area + box2Area - intersectionArea;
+  
+  return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
@@ -33,6 +57,7 @@ export default function InteractiveCanvas({
   predAnnotations,
   visibleCategories,
   confidenceThreshold,
+  iouThreshold = 0.0,
   onAnnotationUpdate,
   categories = {}
 }: InteractiveCanvasProps) {
@@ -94,15 +119,27 @@ export default function InteractiveCanvas({
       );
     }
 
-    // Filter and draw annotations
-    const filteredPred = predToRender.filter(ann => 
-      (ann.conf ?? 1) >= confidenceThreshold &&
-      (visibleCategories.size === 0 || visibleCategories.has(ann.category as any))
-    );
-
+    // Filter GT annotations
     const filteredGt = gtAnnotations.filter(ann =>
       visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
     );
+
+    // Filter pred annotations by confidence and IoU
+    const filteredPred = predToRender.filter(ann => {
+      // Check confidence threshold
+      if ((ann.conf ?? 1) < confidenceThreshold) return false;
+      
+      // Check visible categories
+      if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
+      
+      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
+      if (iouThreshold > 0 && filteredGt.length > 0) {
+        const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
+        if (maxIoU < iouThreshold) return false;
+      }
+      
+      return true;
+    });
 
     const allAnnotations = [...filteredGt, ...filteredPred];
     
@@ -162,7 +199,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, scale, offset, selectedAnnotation, categories, dragState]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, iouThreshold, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {

@@ -7,11 +7,19 @@ interface MapControlPanelProps {
   annotationId: string | null;
   gtId?: string | null;
   predId?: string | null;
+  onThresholdsChange?: (iou: number, conf: number) => void;
 }
 
-export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
+export default function MapControlPanel({ projectId, annotationId, gtId, predId, onThresholdsChange }: MapControlPanelProps) {
   const [conf, setConf] = useState(0.0)
   const [iou, setIou] = useState(0.5)
+  
+  // Notify parent when thresholds change
+  React.useEffect(() => {
+    if (onThresholdsChange) {
+      onThresholdsChange(iou, conf);
+    }
+  }, [iou, conf, onThresholdsChange]);
   
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();

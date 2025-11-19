@@ -18,6 +18,8 @@ function MapPageInner() {
   const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
   const { setCurrentImageIndex, undo, redo, canUndo, canRedo, gtAnnotations, predAnnotations, categories, images, currentImageIndex, updateAnnotation } = useMapStore();
   const [annotationIdList, setAnnotationIdList] = useState<string[]>([]);
+  const [iouThreshold, setIouThreshold] = useState(0.5);
+  const [confThreshold, setConfThreshold] = useState(0.0);
   const annotationId = imageId ? String(imageId) : null;
 
   // Keyboard shortcuts for undo/redo
@@ -83,7 +85,8 @@ function MapPageInner() {
           gtAnnotations={filteredGt}
           predAnnotations={filteredPred}
           visibleCategories={new Set()}
-          confidenceThreshold={0}
+          confidenceThreshold={confThreshold}
+          iouThreshold={iouThreshold}
           onAnnotationUpdate={ann => {
             if (!currentImageId) return;
             updateAnnotation({ ...ann, image_id: currentImageId }, 'pred');
@@ -96,6 +99,10 @@ function MapPageInner() {
         annotationId={annotationId}
         gtId={gtId}
         predId={predId}
+        onThresholdsChange={(iou, conf) => {
+          setIouThreshold(iou);
+          setConfThreshold(conf);
+        }}
       />
     </div>
   );
