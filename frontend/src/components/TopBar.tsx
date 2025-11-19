@@ -17,8 +17,12 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
     const openMapFolder = () => openMapFolderStore(id => {
       setFolderId(id);
-      setImageId(1); // Select first image (1-based ID)
-      setCurrentImageIndex(0); // Set store index (0-based)
+      // Get the first image's ID from the store (images are already loaded)
+      const firstImage = useMapStore.getState().images[0];
+      if (firstImage) {
+        setImageId(firstImage.id); // Select first image by its actual ID
+        setCurrentImageIndex(0); // Set store index to 0
+      }
     });
     const openMapGT = () => openMapGTStore(id => {
       setGtId(id);

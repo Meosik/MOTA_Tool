@@ -51,9 +51,12 @@ function MapPageInner() {
 
   const handleImageSelect = useCallback((imgId: number) => {
     setImageId(imgId);
-    // Update mapStore index (imgId is 1-based, index is 0-based)
-    setCurrentImageIndex(imgId - 1);
-  }, [setImageId, setCurrentImageIndex]);
+    // Find the index of the image with this ID (IDs may not be sequential)
+    const index = images.findIndex(img => img.id === imgId);
+    if (index >= 0) {
+      setCurrentImageIndex(index);
+    }
+  }, [setImageId, setCurrentImageIndex, images]);
 
   const currentImage = images[currentImageIndex] || null;
   const imageUrl = currentImage ? (currentImage.url || URL.createObjectURL(currentImage.file)) : null;
