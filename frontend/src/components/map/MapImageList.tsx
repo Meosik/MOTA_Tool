@@ -67,6 +67,14 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const predAnnotations = useMapStore(s => s.predAnnotations);
   const getImageUrl = useMapStore(s => s.getImageUrl);
   const iou = useMapStore(s => s.iou);
+  
+  // Pagination state - show 5 images at a time
+  const [currentPage, setCurrentPage] = React.useState(0);
+  const itemsPerPage = 5;
+  const totalPages = Math.ceil(images.length / itemsPerPage);
+  const startIdx = currentPage * itemsPerPage;
+  const endIdx = Math.min(startIdx + itemsPerPage, images.length);
+  const visibleImages = images.slice(startIdx, endIdx);
 
   // Simple check - show placeholder if no folder or no images
   if (!folderId) {
@@ -85,15 +93,17 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
     );
   }
 
-  // Display list with thumbnails and metadata
+  // Display list with thumbnails and metadata (5 at a time)
   return (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
-        이미지 목록 ({images.length}개)
+      <div className="px-3 py-2 text-xs text-gray-500 font-semibold flex items-center justify-between">
+        <span>이미지 목록 ({images.length}개)</span>
+        <span className="text-xs">Page {currentPage + 1}/{totalPages}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="space-y-2 p-2">
-          {images.map((image, idx) => {
+        <div className="space-y-1 p-2">
+          {visibleImages.map((image, relIdx) => {
+            const idx = startIdx + relIdx;
             const thumbnailUrl = getImageUrl(idx);
             const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
             const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
@@ -113,29 +123,27 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
                     : 'border-gray-200'
                 }`}
               >
-                <div className="flex gap-2">
-                  {/* Thumbnail */}
+                <div className="flex gap-2 items-center">
+                  {/* Thumbnail - 32x32 */}
                   {thumbnailUrl ? (
                     <img 
                       src={thumbnailUrl} 
                       alt={image.name}
-                      className="w-16 h-16 object-cover rounded flex-shrink-0 bg-gray-200"
+                      className="w-8 h-8 object-cover rounded flex-shrink-0 bg-gray-200"
                     />
                   ) : (
-                    <div className="w-16 h-16 bg-gray-200 rounded flex-shrink-0 flex items-center justify-center text-gray-400 text-xs">
+                    <div className="w-8 h-8 bg-gray-200 rounded flex-shrink-0 flex items-center justify-center text-gray-400" style={{fontSize: '8px'}}>
                       IMG
                     </div>
                   )}
                   
                   {/* Metadata */}
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate" title={image.name}>
+                    <div className="text-xs font-medium truncate" title={image.name}>
                       {image.name}
                     </div>
-                    <div className="text-xs text-gray-600 mt-0.5">
-                      mAP: {(imageMap * 100).toFixed(1)}%
-                    </div>
                     <div className="flex gap-2 text-xs mt-0.5">
+                      <span className="text-gray-600">mAP: {(imageMap * 100).toFixed(1)}%</span>
                       <span className="text-green-600">GT: {gtCount}</span>
                       <span className="text-orange-600">Pred: {predCount}</span>
                     </div>
@@ -146,6 +154,29 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
           })}
         </div>
       </div>
+      
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="p-2 border-t border-gray-200 flex items-center justify-between text-xs">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+            disabled={currentPage === 0}
+            className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            ← Prev
+          </button>
+          <span className="text-gray-600">
+            {startIdx + 1}-{endIdx} of {images.length}
+          </span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={currentPage >= totalPages - 1}
+            className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
