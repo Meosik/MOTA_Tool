@@ -72,7 +72,7 @@ function MapPageInner() {
         annotationIdList={annotationIdList}
         onUploadSuccess={handleFolderUpload}
         folderId={folderId}
-        currentImageId={imageId}
+        currentImageId={currentImageId || null}
         onImageSelect={handleImageSelect}
       />
       <div className="min-h-0 min-w-0 flex flex-col">
