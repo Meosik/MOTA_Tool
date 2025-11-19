@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Annotation } from '../../types/annotation';
+import { useMapStore } from '../../store/mapStore';
 
 interface InteractiveCanvasProps {
   imageUrl: string | null;
@@ -61,6 +62,9 @@ export default function InteractiveCanvas({
   onAnnotationUpdate,
   categories = {}
 }: InteractiveCanvasProps) {
+  // Read thresholds from store (like MOTA mode's OverlayCanvas)
+  const iouThr = useMapStore(s => s.iou);
+  const confThr = useMapStore(s => s.conf);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -124,18 +128,18 @@ export default function InteractiveCanvas({
       visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
     );
 
-    // Filter pred annotations by confidence and IoU
+    // Filter pred annotations by confidence and IoU (using store values like MOTA mode)
     const filteredPred = predToRender.filter(ann => {
-      // Check confidence threshold
-      if ((ann.conf ?? 1) < confidenceThreshold) return false;
+      // Check confidence threshold from store
+      if ((ann.conf ?? 1) < confThr) return false;
       
       // Check visible categories
       if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
       
-      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
-      if (iouThreshold > 0 && filteredGt.length > 0) {
+      // Check IoU threshold from store - pred must have IoU >= threshold with at least one GT box
+      if (iouThr > 0 && filteredGt.length > 0) {
         const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
-        if (maxIoU < iouThreshold) return false;
+        if (maxIoU < iouThr) return false;
       }
       
       return true;
@@ -199,7 +203,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confidenceThreshold, iouThreshold, scale, offset, selectedAnnotation, categories, dragState]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {

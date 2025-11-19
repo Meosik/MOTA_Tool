@@ -30,19 +30,14 @@ interface MapControlPanelProps {
   annotationId: string | null;
   gtId?: string | null;
   predId?: string | null;
-  onThresholdsChange?: (iou: number, conf: number) => void;
 }
 
-export default function MapControlPanel({ projectId, annotationId, gtId, predId, onThresholdsChange }: MapControlPanelProps) {
-  const [conf, setConf] = useState(0.0)
-  const [iou, setIou] = useState(0.5)
-  
-  // Notify parent when thresholds change
-  React.useEffect(() => {
-    if (onThresholdsChange) {
-      onThresholdsChange(iou, conf);
-    }
-  }, [iou, conf, onThresholdsChange]);
+export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
+  // Read thresholds from store (like MOTA mode's RightPanel)
+  const iou = useMapStore(s => s.iou);
+  const conf = useMapStore(s => s.conf);
+  const setIou = useMapStore(s => s.setIou);
+  const setConf = useMapStore(s => s.setConf);
   
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();

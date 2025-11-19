@@ -18,6 +18,12 @@ interface MapState {
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
   historyIndex: number;
   
+  // Threshold values (like MOTA mode)
+  iou: number;
+  conf: number;
+  setIou: (v: number) => void;
+  setConf: (v: number) => void;
+  
   setImages: (images: MapImage[]) => void;
   setCurrentImageIndex: (index: number) => void;
   getCurrentImage: () => MapImage | null;
@@ -70,6 +76,12 @@ export const useMapStore = create<MapState>((set, get) => ({
   redoStack: [],
   editHistory: [],
   historyIndex: -1,
+  
+  // Threshold values (matching MOTA mode defaults)
+  iou: 0.5,
+  conf: 0.0,
+  setIou: (v) => set({ iou: v }),
+  setConf: (v) => set({ conf: v }),
   
   setImages: (images) => {
     clearUrlCache();
