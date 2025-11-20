@@ -91,43 +91,27 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
-  // Initialize new instances as visible (don't reset existing visibility)
-  // Use annotation array lengths in dependencies to trigger re-run when they load
+  // Initialize ALL instances as visible when annotations first load (don't filter by current image)
+  // This ensures all checkboxes are checked by default regardless of image_id matching
   React.useEffect(() => {
-    const currentIds = new Set<string>();
-    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id);
-    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id);
-    
-    gtForImage.forEach(a => currentIds.add(`gt-${a.id}`));
-    predForImage.forEach(a => currentIds.add(`pred-${a.id}`));
-    
-    console.log('[Visibility Init] Current image:', currentImage.id);
-    console.log('[Visibility Init] Found instances:', currentIds.size, Array.from(currentIds).slice(0, 5));
-    console.log('[Visibility Init] GT for image:', gtForImage.length, 'Pred for image:', predForImage.length);
-    console.log('[Visibility Init] GT total:', gtAnnotations.length, 'Pred total:', predAnnotations.length);
-    
-    // Debug: Show sample image IDs from annotations
-    if (gtAnnotations.length > 0) {
-      const sampleGtIds = gtAnnotations.slice(0, 5).map(a => a.image_id);
-      console.log('[Visibility Init] Sample GT image_ids:', sampleGtIds);
-    }
-    if (predAnnotations.length > 0) {
-      const samplePredIds = predAnnotations.slice(0, 5).map(a => a.image_id);
-      console.log('[Visibility Init] Sample Pred image_ids:', samplePredIds);
-    }
-    
-    // Skip if no instances found (annotations not loaded yet or wrong image)
-    if (currentIds.size === 0) {
-      console.log('[Visibility Init] No instances found - skipping initialization');
+    // Skip if annotations haven't loaded yet
+    if (gtAnnotations.length === 0 && predAnnotations.length === 0) {
       return;
     }
     
+    // Collect ALL instance IDs from all annotations (not just current image)
+    const allIds = new Set<string>();
+    gtAnnotations.forEach(a => allIds.add(`gt-${a.id}`));
+    predAnnotations.forEach(a => allIds.add(`pred-${a.id}`));
+    
+    console.log('[Visibility Init] GT total:', gtAnnotations.length, 'Pred total:', predAnnotations.length);
+    console.log('[Visibility Init] All instances:', allIds.size);
+    
     // Only add instances that aren't already in visibleInstances
     setVisibleInstances((prev: Set<string>) => {
-      console.log('[Visibility Init] Previous visible count:', prev.size);
       const next = new Set(prev);
       let addedCount = 0;
-      currentIds.forEach(id => {
+      allIds.forEach(id => {
         if (!next.has(id)) {
           next.add(id); // Add new instances as visible by default
           addedCount++;
@@ -136,7 +120,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       console.log('[Visibility Init] Added:', addedCount, 'Total visible now:', next.size);
       return next;
     });
-  }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
+  }, [gtAnnotations.length, predAnnotations.length, setVisibleInstances]);
   
   // Group annotations by type and category
   const groupedAnns = React.useMemo(() => {
