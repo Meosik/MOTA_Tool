@@ -72,7 +72,11 @@ export default function OverlayCanvas(){
   const rootRef = useRef<HTMLDivElement>(null)
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
-  const fm = frames[cur] || null;
+  const fm = useMemo(() => frames[cur] || null, [frames, cur]);
+  
+  // Frame cache for rendered canvases (using OffscreenCanvas when available)
+  const frameCache = useRef<Map<string, ImageBitmap | HTMLCanvasElement>>(new Map());
+  const MAX_CACHED_FRAMES = 30;
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
   const [predBase, setPredBase] = useState<FlatBox[]>([]);
@@ -101,7 +105,20 @@ export default function OverlayCanvas(){
   useEffect(()=>{
     if (!fm) { setImg(null); return; }
     if (!fm.url) { setImg(null); return; }
-    getImage(fm.url).then(setImg).catch(()=>setImg(null));
+    
+    // Ensure image is fully decoded before setting
+    getImage(fm.url).then(async (loadedImg) => {
+      try {
+        // Force decode to happen now instead of during draw
+        if ('decode' in loadedImg) {
+          await loadedImg.decode();
+        }
+        setImg(loadedImg);
+      } catch {
+        setImg(loadedImg); // Fallback if decode fails
+      }
+    }).catch(()=>setImg(null));
+    
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
     setIdEdit(v=> ({...v, show:false}))
@@ -117,7 +134,7 @@ export default function OverlayCanvas(){
       } else setGtBoxes([]);
     })();
     return ()=>{aborted = true;}
-  }, [gtId, fm?.i]);
+  }, [gtId, fm]);
 
   useEffect(()=>{
     let aborted = false;
@@ -128,7 +145,7 @@ export default function OverlayCanvas(){
       } else setPredBase([]);
     })();
     return ()=>{aborted = true;}
-  }, [predId, fm?.i]);
+  }, [predId, fm]);
 
   useEffect(()=>{
     setActiveId(null);
@@ -264,54 +281,152 @@ export default function OverlayCanvas(){
     }
   }, []);
 
-  // draw - optimized with batching
+  // draw - optimized with RAF throttling, OffscreenCanvas, and frame caching
   useEffect(() => {
     const cnv = cnvRef.current;
     if (!cnv) return;
     const ctx = cnv.getContext('2d', { alpha: false }); // Disable alpha for better performance
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = cnv.clientWidth;
-    const cssH = cnv.clientHeight;
-    
-    if (cnv.width !== Math.floor(cssW * dpr) || cnv.height !== Math.floor(cssH * dpr)) {
-      cnv.width = Math.floor(cssW * dpr);
-      cnv.height = Math.floor(cssH * dpr);
-    }
-    
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
+    let rafId: number | null = null;
+    let needsRender = true;
 
-    // Draw image
-    if (img) {
-      ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
-    } else {
-      ctx.fillStyle = '#f7f7f7';
-      ctx.fillRect(0, 0, cssW, cssH);
-    }
+    // Generate cache key for current frame state
+    const getCacheKey = () => {
+      const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
+      return `${fm?.i ?? 'none'}-${showGT}-${showPred}-${gtBoxes.length}-${predBoxes.length}-${boxKey}`;
+    };
 
-    const offset = { ox: layout.ox, oy: layout.oy };
+    // Render to OffscreenCanvas (or fallback to regular canvas) to avoid blocking main thread
+    const renderToOffscreen = (width: number, height: number, dpr: number) => {
+      let offscreen: OffscreenCanvas | HTMLCanvasElement;
+      let offscreenCtx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
-    // Draw GT boxes (batched)
-    if (showGT && gtBoxes.length) {
-      drawBoxes(ctx, gtBoxes, true, layout.s, offset);
-    }
+      // Try to use OffscreenCanvas for better performance
+      if (typeof OffscreenCanvas !== 'undefined') {
+        offscreen = new OffscreenCanvas(Math.floor(width * dpr), Math.floor(height * dpr));
+        offscreenCtx = offscreen.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
+      } else {
+        // Fallback to regular canvas
+        offscreen = document.createElement('canvas');
+        offscreen.width = Math.floor(width * dpr);
+        offscreen.height = Math.floor(height * dpr);
+        offscreenCtx = offscreen.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+      }
 
-    // Draw Pred boxes (batched)
-    if (showPred && predBoxes.length) {
-      // Adjust predBoxes for active/ghost state
-      const adjustedPredBoxes = predBoxes.map(b => {
-        if (activeId === b.id && ghostBox) {
-          return ghostBox;
-        }
-        return b;
-      });
+      offscreenCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      offscreenCtx.clearRect(0, 0, width, height);
+
+      // Draw image
+      if (img) {
+        offscreenCtx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+      } else {
+        offscreenCtx.fillStyle = '#ffffff';
+        offscreenCtx.fillRect(0, 0, width, height);
+      }
+
+      const offset = { ox: layout.ox, oy: layout.oy };
+
+      // Draw GT boxes (batched)
+      if (showGT && gtBoxes.length) {
+        drawBoxes(offscreenCtx, gtBoxes, true, layout.s, offset);
+      }
+
+      // Draw Pred boxes (batched)
+      if (showPred && predBoxes.length) {
+        // Adjust predBoxes for active/ghost state
+        const adjustedPredBoxes = predBoxes.map(b => {
+          if (activeId === b.id && ghostBox) {
+            return ghostBox;
+          }
+          return b;
+        });
+        
+        drawBoxes(offscreenCtx, adjustedPredBoxes, false, layout.s, offset);
+        drawPredHandles(offscreenCtx, predBoxes, activeId, ghostBox, layout.s, offset);
+      }
+
+      return offscreen;
+    };
+
+    const render = async () => {
+      if (!needsRender) return;
+      needsRender = false;
+
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = cnv.clientWidth;
+      const cssH = cnv.clientHeight;
       
-      drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
-      drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
-    }
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles])
+      if (cnv.width !== Math.floor(cssW * dpr) || cnv.height !== Math.floor(cssH * dpr)) {
+        cnv.width = Math.floor(cssW * dpr);
+        cnv.height = Math.floor(cssH * dpr);
+      }
+      
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      // Try to use cached frame (only when not editing)
+      const cacheKey = getCacheKey();
+      const cached = activeId === null ? frameCache.current.get(cacheKey) : null;
+      
+      if (cached) {
+        // Draw cached frame - fast blit operation
+        ctx.drawImage(cached as any, 0, 0, cssW, cssH);
+        return;
+      }
+
+      // Render frame using OffscreenCanvas
+      const offscreen = renderToOffscreen(cssW, cssH, dpr);
+      
+      // Draw the offscreen canvas to main canvas
+      ctx.drawImage(offscreen as any, 0, 0, cssW, cssH);
+
+      // Cache the rendered frame (only if not editing)
+      if (activeId === null && img) {
+        try {
+          // Convert OffscreenCanvas to ImageBitmap for efficient caching
+          let bitmap: ImageBitmap;
+          if (offscreen instanceof OffscreenCanvas) {
+            bitmap = offscreen.transferToImageBitmap();
+          } else {
+            bitmap = await createImageBitmap(offscreen);
+          }
+          
+          frameCache.current.set(cacheKey, bitmap);
+          
+          // Limit cache size
+          if (frameCache.current.size > MAX_CACHED_FRAMES) {
+            const firstKey = frameCache.current.keys().next().value;
+            const oldBitmap = frameCache.current.get(firstKey);
+            if (oldBitmap && 'close' in oldBitmap) {
+              (oldBitmap as ImageBitmap).close();
+            }
+            frameCache.current.delete(firstKey);
+          }
+        } catch (e) {
+          // Bitmap creation not supported, skip caching
+        }
+      }
+    };
+
+    const scheduleRender = () => {
+      needsRender = true;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          render();
+          rafId = null;
+        });
+      }
+    };
+
+    scheduleRender();
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm])
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
