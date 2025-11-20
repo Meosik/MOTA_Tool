@@ -82,9 +82,13 @@ function toBox(fb:FlatBox): Box {
 }
 
 // ---- ObjectURL LRU (핵심 개선)
-const MAX_URLS = 400; // 메모리/디코드 부하 제한
+const MAX_URLS = 150; // Phase 1: 축소 (400 → 150) - 메모리 절약
 const urlLRU: string[] = [];             // 최근 사용 순
 const urlOwner = new Map<string, number>(); // url -> frameIndex
+
+// ---- Image Cache LRU (Phase 1: 새로 추가)
+const MAX_DECODED_IMAGES = 200; // ~600MB 최대
+const imgCacheLRU: string[] = [];
 
 function touchURL(url:string){
   const i = urlLRU.indexOf(url);
@@ -93,6 +97,19 @@ function touchURL(url:string){
   while (urlLRU.length > MAX_URLS){
     const old = urlLRU.shift()!;
     try { URL.revokeObjectURL(old); } catch {}
+  }
+}
+
+// Phase 1: 디코드된 이미지 LRU 관리
+function touchDecodedImage(url: string, cache: Map<string, Promise<HTMLImageElement>>) {
+  const i = imgCacheLRU.indexOf(url);
+  if (i >= 0) imgCacheLRU.splice(i, 1);
+  imgCacheLRU.push(url);
+  
+  // 가장 오래된 디코드 이미지 제거
+  while (imgCacheLRU.length > MAX_DECODED_IMAGES) {
+    const oldUrl = imgCacheLRU.shift()!;
+    cache.delete(oldUrl);
   }
 }
 
@@ -114,6 +131,19 @@ function ensureObjectURLFor(index:number){
   urlOwner.set(url, index);
   touchURL(url);
   useFrameStore.setState({ frames: attachURLToFrame(frames, index, url) });
+}
+
+// Phase 2: 메모리 압박 감지 (적응형 prefetch)
+function getAdaptiveRadius(): number {
+  // @ts-ignore - performance.memory는 Chrome 전용
+  const memInfo = performance.memory;
+  if (memInfo) {
+    const usedPercent = memInfo.usedJSHeapSize / memInfo.jsHeapSizeLimit;
+    if (usedPercent > 0.8) return 1;  // 메모리 부족: 최소 prefetch
+    if (usedPercent > 0.6) return 2;  // 보통: 기본 prefetch
+    return 3;  // 여유: 적극적 prefetch
+  }
+  return 2;  // 기본값: 보수적
 }
 
 // ---- Prefetch 스케줄링 (과도한 폭주 방지)
@@ -253,8 +283,32 @@ const useFrameStore = create<State>((set, get) => ({
     input.click();
   },
 
-  setGT: (id)=> set({ gtAnnotationId: id }),
-  setPred: (id)=> set({ predAnnotationId: id }),
+  setGT: (id)=> {
+    // Phase 1: 새 GT 파일 로드 시 이전 GT 캐시 정리
+    const oldId = get().gtAnnotationId;
+    if (id !== oldId && oldId) {
+      // 이전 GT 캐시의 모든 항목 제거
+      for (const key of Array.from(gtCache.keys())) {
+        if (key.startsWith(`${oldId}:`)) {
+          gtCache.delete(key);
+        }
+      }
+    }
+    set({ gtAnnotationId: id });
+  },
+  setPred: (id)=> {
+    // Phase 1: 새 Pred 파일 로드 시 이전 Pred 캐시 정리
+    const oldId = get().predAnnotationId;
+    if (id !== oldId && oldId) {
+      // 이전 Pred 캐시의 모든 항목 제거
+      for (const key of Array.from(prCache.keys())) {
+        if (key.startsWith(`${oldId}:`)) {
+          prCache.delete(key);
+        }
+      }
+    }
+    set({ predAnnotationId: id });
+  },
 
   setIou: (v)=> set({ iou: Math.max(0, Math.min(1, v)) }),
   setConf: (v)=> set({ conf: Math.max(0, Math.min(1, v)) }),
@@ -262,10 +316,19 @@ const useFrameStore = create<State>((set, get) => ({
   getImage: async(url:string)=>{
     const cache = get().imgCache;
     const hit = cache.get(url);
-    if (hit) return hit;
+    if (hit) {
+      // Phase 1: 캐시 히트 시 LRU 업데이트
+      touchDecodedImage(url, cache);
+      return hit;
+    }
     const p = new Promise<HTMLImageElement>((resolve,reject)=>{
       const img = new Image();
-      img.onload = ()=> { touchURL(url); resolve(img); };
+      img.onload = ()=> { 
+        touchURL(url);
+        // Phase 1: 디코드 완료 시 LRU 추가
+        touchDecodedImage(url, cache);
+        resolve(img); 
+      };
       img.onerror = reject;
       img.src = url;
       // modern 브라우저에서 디코드 힌트
@@ -276,8 +339,10 @@ const useFrameStore = create<State>((set, get) => ({
     return p;
   },
 
-  prefetchAround: (center, radius=2)=>{
-    schedulePrefetch(center, radius);
+  prefetchAround: (center, radius?)=>{
+    // Phase 2: radius가 지정되지 않으면 적응형 사용
+    const adaptiveRadius = radius ?? getAdaptiveRadius();
+    schedulePrefetch(center, adaptiveRadius);
   },
 
   fillCacheWindow: async(kind, f0, f1)=>{
@@ -315,10 +380,18 @@ const useFrameStore = create<State>((set, get) => ({
     curMap.set(id, { ...next });
     const overrides = new Map(get().overrides);
     overrides.set(frame, curMap);
+    
+    // Phase 2: undo 스택 크기 제한 (최대 100개)
+    const MAX_UNDO_STACK = 100;
+    let undoStack = [...get().undoStack, { frame, id, before, after: next }];
+    if (undoStack.length > MAX_UNDO_STACK) {
+      undoStack = undoStack.slice(-MAX_UNDO_STACK);
+    }
+    
     set({
       overrides,
       overrideVersion: get().overrideVersion + 1,
-      undoStack: [...get().undoStack, { frame, id, before, after: next }],
+      undoStack,
       redoStack: [],
     });
   },
@@ -371,11 +444,16 @@ const useFrameStore = create<State>((set, get) => ({
     overrides.set(frame, curMap);
     
     // ID 변경을 히스토리에 기록 (oldId 삭제, newId 추가)
-    const undoStack = [
+    // Phase 2: undo 스택 크기 제한
+    const MAX_UNDO_STACK = 100;
+    let undoStack = [
       ...get().undoStack,
       { frame, id: oldId, before, after: undefined },
       { frame, id: newId, before: undefined, after: newBox }
     ];
+    if (undoStack.length > MAX_UNDO_STACK) {
+      undoStack = undoStack.slice(-MAX_UNDO_STACK);
+    }
     
     set({
       overrides,
