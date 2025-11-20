@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { Annotation } from '../../types/annotation';
 import { useMapStore } from '../../store/mapStore';
 import { getCategoryIdByName, getCategoryNameById } from '../../constants/cocoCategories';
@@ -66,15 +66,7 @@ export default function InteractiveCanvas({
   // Read thresholds and visibility from store (like MOTA mode's OverlayCanvas)
   const iouThr = useMapStore(s => s.iou);
   const confThr = useMapStore(s => s.conf);
-  const visibleInstancesRaw = useMapStore(s => s.visibleInstances);
-  // Ensure visibleInstances is always a Set (convert if needed)
-  const visibleInstances = useMemo(() => {
-    if (!visibleInstancesRaw) return new Set<string>();
-    if (visibleInstancesRaw instanceof Set) return visibleInstancesRaw;
-    // If it's not a Set (e.g., serialized to object), convert it
-    return new Set<string>(Object.keys(visibleInstancesRaw));
-  }, [visibleInstancesRaw]);
-  
+  const visibleInstances = useMapStore(s => s.visibleInstances);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -102,62 +94,18 @@ export default function InteractiveCanvas({
     return categoryId !== undefined ? CATEGORY_COLORS[categoryId % CATEGORY_COLORS.length] : '#6366f1';
   };
 
-  // Memoize filtered annotations to avoid recalculating IoU on every render
-  const filteredAnnotations = useMemo(() => {
-    console.log('[Canvas Filter] visibleInstances size:', visibleInstances.size, 
-                '- GT total:', gtAnnotations.length, '- Pred total:', predAnnotations.length);
-    
-    // If dragging, replace the annotation being dragged with the updated version from dragState
-    let predToRender = predAnnotations;
-    if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
-      predToRender = predAnnotations.map((ann, idx) =>
-        idx === dragState.annotationIndex ? dragState.annotation! : ann
-      );
-    }
-
-    // Filter GT annotations
-    const filteredGt = gtAnnotations.filter(ann => {
-      // Check visibility from control panel - if not in the set, hide it
-      if (!visibleInstances.has(`gt-${ann.id}`)) return false;
-      
-      // Check visible categories
-      return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
-    });
-
-    // Filter pred annotations by confidence, IoU, and visibility
-    const filteredPred = predToRender.filter(ann => {
-      // Check visibility from control panel - if not in the set, hide it
-      if (!visibleInstances.has(`pred-${ann.id}`)) return false;
-      
-      // Check confidence threshold from store
-      if ((ann.conf ?? 1) < confThr) return false;
-      
-      // Check visible categories
-      if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
-      
-      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
-      if (iouThr > 0 && filteredGt.length > 0) {
-        let maxIoU = 0;
-        for (const gt of filteredGt) {
-          const iou = calculateIoU(ann.bbox, gt.bbox);
-          if (iou > maxIoU) maxIoU = iou;
-        }
-        if (maxIoU < iouThr) return false;
-      }
-      
-      return true;
-    });
-
-    console.log('[Canvas Filter] Result - GT visible:', filteredGt.length, '- Pred visible:', filteredPred.length);
-    return { filteredGt, filteredPred };
-  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, dragState]);
-
   const drawAnnotations = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     const img = imageRef.current;
     
     if (!canvas || !ctx || !img || !img.complete) {
+      console.log('InteractiveCanvas: Cannot draw -', { 
+        hasCanvas: !!canvas, 
+        hasCtx: !!ctx, 
+        hasImg: !!img, 
+        imgComplete: img?.complete 
+      });
       return;
     }
 
@@ -171,9 +119,50 @@ export default function InteractiveCanvas({
     ctx.drawImage(img, 0, 0);
     ctx.restore();
 
-    const { filteredGt, filteredPred } = filteredAnnotations;
+    // If dragging, replace the annotation being dragged with the updated version from dragState
+    let predToRender = predAnnotations;
+    if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
+      predToRender = predAnnotations.map((ann, idx) => 
+        idx === dragState.annotationIndex ? dragState.annotation! : ann
+      );
+    }
+
+    // Filter GT annotations
+    const filteredGt = gtAnnotations.filter(ann => {
+      // Check visibility from control panel
+      if (visibleInstances.size > 0 && !visibleInstances.has(`gt-${ann.id}`)) return false;
+      
+      // Check visible categories
+      return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
+    });
+
+    // Filter pred annotations by confidence, IoU, and visibility
+    const filteredPred = predToRender.filter(ann => {
+      // Check visibility from control panel
+      if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
+      
+      // Check confidence threshold from store
+      if ((ann.conf ?? 1) < confThr) return false;
+      
+      // Check visible categories
+      if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
+      
+      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
+      if (iouThr > 0 && filteredGt.length > 0) {
+        const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
+        if (maxIoU < iouThr) return false;
+      }
+      
+      return true;
+    });
 
     const allAnnotations = [...filteredGt, ...filteredPred];
+    
+    console.log('InteractiveCanvas: Drawing', { 
+      gtCount: filteredGt.length, 
+      predCount: filteredPred.length,
+      totalAnnotations: allAnnotations.length
+    });
 
     allAnnotations.forEach(ann => {
       const [x, y, w, h] = ann.bbox;
@@ -225,15 +214,18 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [filteredAnnotations, scale, offset, selectedAnnotation, categories]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {
+      console.log('InteractiveCanvas: No imageUrl provided');
       return;
     }
 
+    console.log('InteractiveCanvas: Loading image from URL:', imageUrl.substring(0, 50));
     const img = new Image();
     img.onload = () => {
+      console.log('InteractiveCanvas: Image loaded successfully', img.width, 'x', img.height);
       imageRef.current = img;
       const canvas = canvasRef.current;
       const container = containerRef.current;
@@ -251,7 +243,11 @@ export default function InteractiveCanvas({
           x: (canvas.width - img.width * newScale) / 2,
           y: (canvas.height - img.height * newScale) / 2
         });
+        console.log('InteractiveCanvas: Canvas setup complete', { scale: newScale, offset: { x: (canvas.width - img.width * newScale) / 2, y: (canvas.height - img.height * newScale) / 2 } });
       }
+    };
+    img.onerror = (err) => {
+      console.error('InteractiveCanvas: Image loading failed', err);
     };
     img.src = imageUrl;
   }, [imageUrl]);
@@ -460,37 +456,27 @@ export default function InteractiveCanvas({
     });
   };
 
-  // Add wheel event listener with passive: false to allow preventDefault
-  // IMPORTANT: Must be placed before any early returns (Rules of Hooks)
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
     
-    const wheelHandler = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      if (!rect) return;
-      
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      
-      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newScale = Math.max(0.1, Math.min(5, scale * zoomFactor));
-      
-      // Zoom towards mouse position
-      const imgX = (mouseX - offset.x) / scale;
-      const imgY = (mouseY - offset.y) / scale;
-      
-      setScale(newScale);
-      setOffset({
-        x: mouseX - imgX * newScale,
-        y: mouseY - imgY * newScale
-      });
-    };
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
     
-    canvas.addEventListener('wheel', wheelHandler, { passive: false });
-    return () => canvas.removeEventListener('wheel', wheelHandler);
-  }, [scale, offset]);
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = Math.max(0.1, Math.min(5, scale * zoomFactor));
+    
+    // Zoom towards mouse position
+    const imgX = (mouseX - offset.x) / scale;
+    const imgY = (mouseY - offset.y) / scale;
+    
+    setScale(newScale);
+    setOffset({
+      x: mouseX - imgX * newScale,
+      y: mouseY - imgY * newScale
+    });
+  };
 
   if (!imageUrl) {
     return (
@@ -509,6 +495,7 @@ export default function InteractiveCanvas({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />
       <div className="absolute bottom-4 right-4 bg-white px-3 py-2 rounded shadow text-sm">

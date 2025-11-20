@@ -79,48 +79,21 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   gtAnnotations: any[];
   predAnnotations: any[];
 }) {
-  const visibleInstancesRaw = useMapStore(s => s.visibleInstances);
-  // Ensure visibleInstances is always a Set (convert if needed)
-  const visibleInstances = React.useMemo(() => {
-    if (!visibleInstancesRaw) return new Set<string>();
-    if (visibleInstancesRaw instanceof Set) return visibleInstancesRaw;
-    // If it's not a Set (e.g., serialized to object), convert it
-    return new Set<string>(Object.keys(visibleInstancesRaw));
-  }, [visibleInstancesRaw]);
-  
+  const visibleInstances = useMapStore(s => s.visibleInstances) || new Set<string>();
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
-  // Initialize ALL instances as visible when annotations first load (don't filter by current image)
-  // This ensures all checkboxes are checked by default regardless of image_id matching
+  // Initialize all instances as visible
   React.useEffect(() => {
-    // Skip if annotations haven't loaded yet
-    if (gtAnnotations.length === 0 && predAnnotations.length === 0) {
-      return;
-    }
-    
-    // Collect ALL instance IDs from all annotations (not just current image)
     const allIds = new Set<string>();
-    gtAnnotations.forEach(a => allIds.add(`gt-${a.id}`));
-    predAnnotations.forEach(a => allIds.add(`pred-${a.id}`));
-    
-    console.log('[Visibility Init] GT total:', gtAnnotations.length, 'Pred total:', predAnnotations.length);
-    console.log('[Visibility Init] All instances:', allIds.size);
-    
-    // Only add instances that aren't already in visibleInstances
-    setVisibleInstances((prev: Set<string>) => {
-      const next = new Set(prev);
-      let addedCount = 0;
-      allIds.forEach(id => {
-        if (!next.has(id)) {
-          next.add(id); // Add new instances as visible by default
-          addedCount++;
-        }
-      });
-      console.log('[Visibility Init] Added:', addedCount, 'Total visible now:', next.size);
-      return next;
+    gtAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
+      allIds.add(`gt-${a.id}`);
     });
-  }, [gtAnnotations.length, predAnnotations.length, setVisibleInstances]);
+    predAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
+      allIds.add(`pred-${a.id}`);
+    });
+    setVisibleInstances(allIds);
+  }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
   
   // Group annotations by type and category
   const groupedAnns = React.useMemo(() => {
@@ -154,13 +127,10 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   };
   
   const toggleInstance = (id: string) => {
-    console.log('[Visibility Toggle] Instance:', id);
     setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
-      const wasVisible = next.has(id);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      console.log('[Visibility Toggle]', id, wasVisible ? 'hidden' : 'shown', '- Total visible:', next.size);
       return next;
     });
   };
@@ -172,13 +142,9 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       .forEach(a => instances.push(`${type}-${a.id}`));
     
     const allVisible = instances.every(id => visibleInstances.has(id));
-    console.log('[Visibility ToggleGroup]', type, category !== undefined ? `cat-${category}` : 'all', 
-                '- instances:', instances.length, '- allVisible:', allVisible);
-    
     setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
-      console.log('[Visibility ToggleGroup] Action:', allVisible ? 'hide' : 'show', '- Total visible:', next.size);
       return next;
     });
   };
@@ -195,10 +161,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
           </button>
           <input 
             type="checkbox" 
-            checked={(() => {
-              const gtAnns = Array.from(groupedAnns.gtByCategory.values()).flat();
-              return gtAnns.length > 0 && gtAnns.every(a => visibleInstances.has(`gt-${a.id}`));
-            })()}
+            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
             onChange={() => toggleAllInGroup('gt')}
             className="w-3 h-3"
           />
@@ -213,7 +176,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
               </button>
               <input 
                 type="checkbox" 
-                checked={anns.length > 0 && anns.every(a => visibleInstances.has(`gt-${a.id}`))}
+                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
                 onChange={() => toggleAllInGroup('gt', cat)}
                 className="w-3 h-3"
               />
@@ -243,10 +206,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
           </button>
           <input 
             type="checkbox" 
-            checked={(() => {
-              const predAnns = Array.from(groupedAnns.predByCategory.values()).flat();
-              return predAnns.length > 0 && predAnns.every(a => visibleInstances.has(`pred-${a.id}`));
-            })()}
+            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
             onChange={() => toggleAllInGroup('pred')}
             className="w-3 h-3"
           />
@@ -261,7 +221,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
               </button>
               <input 
                 type="checkbox" 
-                checked={anns.length > 0 && anns.every(a => visibleInstances.has(`pred-${a.id}`))}
+                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
                 onChange={() => toggleAllInGroup('pred', cat)}
                 className="w-3 h-3"
               />
@@ -293,38 +253,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const setIou = useMapStore(s => s.setIou);
   const setConf = useMapStore(s => s.setConf);
   
-  // Local state for slider values with throttled updates to store
-  const [localIou, setLocalIou] = useState(iou);
-  const [localConf, setLocalConf] = useState(conf);
-  
-  // Sync local state with store when store changes externally
-  React.useEffect(() => {
-    setLocalIou(iou);
-  }, [iou]);
-  
-  React.useEffect(() => {
-    setLocalConf(conf);
-  }, [conf]);
-  
-  // Throttle store updates (update store 300ms after user stops adjusting for better performance)
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      if (localIou !== iou) {
-        setIou(localIou);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [localIou, iou, setIou]);
-  
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      if (localConf !== conf) {
-        setConf(localConf);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [localConf, conf, setConf]);
-  
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
   const currentImage = images[currentImageIndex] || null;
@@ -355,6 +283,9 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const imageStats = React.useMemo(() => {
     if (!currentImage) return null;
     
+    console.log('MapControlPanel: Calculating stats for image', currentImage.id);
+    console.log('MapControlPanel: Total GT', gtAnnotations.length, 'Total Pred', predAnnotations.length);
+    
     // Filter GT for current image
     const gtForImage = gtAnnotations.filter(a => {
       // If no image_id, show for all images
@@ -363,7 +294,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       return a.image_id === currentImage.id;
     });
     
-    // Filter pred annotations by image, confidence, and IoU (optimized)
+    // Filter pred annotations by image, confidence, and IoU
     const predForImage = predAnnotations.filter(a => {
       // Check image_id
       if (a.image_id && a.image_id !== currentImage.id) return false;
@@ -373,17 +304,14 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       
       // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
       if (iou > 0 && gtForImage.length > 0) {
-        let maxIoU = 0;
-        for (const gt of gtForImage) {
-          const currentIoU = calculateIoU(a.bbox, gt.bbox);
-          if (currentIoU > maxIoU) maxIoU = currentIoU;
-          if (maxIoU >= iou) break; // Early exit if threshold met
-        }
+        const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(a.bbox, gt.bbox)));
         if (maxIoU < iou) return false;
       }
       
       return true;
     });
+    
+    console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
     // Calculate AP for current image
     const imageAP = calculateImageAP(gtForImage, predForImage, iou);
@@ -402,8 +330,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const stepLarge = 0.05
   const round2 = (v: number) => Math.round(v * 100) / 100
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
-  const adjustIou = (d: number) => setLocalIou(clamp01(round2(localIou + d)))
-  const adjustConf = (d: number) => setLocalConf(clamp01(round2(localConf + d)))
+  const adjustIou = (d: number) => setIou(clamp01(round2(iou + d)))
+  const adjustConf = (d: number) => setConf(clamp01(round2(conf + d)))
 
   return (
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
@@ -422,8 +350,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             min={0}
             max={1}
             step={0.01}
-            value={localIou}
-            onChange={e => setLocalIou(clamp01(parseFloat(e.currentTarget.value)))}
+            value={iou}
+            onChange={e => setIou(clamp01(parseFloat(e.currentTarget.value)))}
             className="flex-1"
           />
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(+stepSmall)} title="IoU +0.01">
@@ -433,7 +361,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">IoU = {localIou.toFixed(2)}</div>
+        <div className="text-xs text-neutral-600 font-mono">IoU = {iou.toFixed(2)}</div>
       </div>
 
       {/* Confidence Threshold */}
@@ -451,8 +379,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             min={0}
             max={1}
             step={0.01}
-            value={localConf}
-            onChange={e => setLocalConf(clamp01(parseFloat(e.currentTarget.value)))}
+            value={conf}
+            onChange={e => setConf(clamp01(parseFloat(e.currentTarget.value)))}
             className="flex-1"
           />
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(+stepSmall)} title="conf +0.01">
@@ -462,7 +390,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">conf ≥ {localConf.toFixed(2)}</div>
+        <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
       </div>
 
       {/* Instance Visibility Controls */}
