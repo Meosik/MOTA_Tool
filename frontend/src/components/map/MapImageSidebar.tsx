@@ -23,13 +23,6 @@ export default function MapImageSidebar({
   currentImageId,
   onImageSelect
 }: SidebarProps) {
-  // Debug logging
-  console.log('[MapImageSidebar] RENDER');
-  console.log('[MapImageSidebar] folderId:', folderId);
-  console.log('[MapImageSidebar] onImageSelect:', onImageSelect);
-  console.log('[MapImageSidebar] currentImageId:', currentImageId);
-  console.log('[MapImageSidebar] Condition (folderId && onImageSelect):', folderId && onImageSelect);
-
   return (
     <aside className="p-2 w-64 border-r flex flex-col gap-3 bg-gray-50 h-full min-h-0">
       <div className="flex flex-col gap-2">

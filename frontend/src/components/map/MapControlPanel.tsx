@@ -127,7 +127,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   };
   
   const toggleInstance = (id: string) => {
-    setVisibleInstances(prev => {
+    setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -142,7 +142,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       .forEach(a => instances.push(`${type}-${a.id}`));
     
     const allVisible = instances.every(id => visibleInstances.has(id));
-    setVisibleInstances(prev => {
+    setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
       return next;
@@ -261,13 +261,23 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  // Call backend API to calculate mAP automatically (always enabled)
-  const { data, isLoading, error } = useMapMetrics(
+  // Manual trigger for overall mAP calculation
+  const [shouldCalculateOverall, setShouldCalculateOverall] = useState(false);
+  
+  // Call backend API only when manually triggered
+  const { data, isLoading, error, refetch } = useMapMetrics(
     effectiveGtId, 
     effectivePredId!, 
     conf, 
-    iou
+    iou,
+    shouldCalculateOverall
   );
+  
+  // Handle calculate overall mAP button click
+  const handleCalculateOverallMap = () => {
+    setShouldCalculateOverall(true);
+    refetch();
+  };
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -402,8 +412,17 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       )}
 
       {/* Overall Dataset Metrics */}
-      <div className="space-y-1">
-        <div className="text-sm font-semibold">Overall Dataset</div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold">Overall Dataset</div>
+          <button
+            onClick={handleCalculateOverallMap}
+            disabled={!effectiveGtId || !effectivePredId || isLoading}
+            className="px-3 py-1 text-xs rounded bg-brand-600 text-white hover:bg-brand-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Calculating...' : 'Calculate Overall mAP'}
+          </button>
+        </div>
         
         {error && (
           <div className="text-xs text-red-500">Error loading metrics</div>
@@ -439,7 +458,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             )}
           </>
         ) : (
-          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하면 전체 데이터셋 mAP가 계산됩니다.</div>
+          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하고 버튼을 눌러 전체 데이터셋 mAP를 계산하세요.</div>
         )}
       </div>
     </aside>

@@ -10,27 +10,20 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const setCurrentImageIndex = useMapStore(s => s.setCurrentImageIndex);
     const openMapGTStore = useMapStore(s => s.openMapGT);
     const openMapPredStore = useMapStore(s => s.openMapPred);
-    const exportMapPred = useMapStore(s => s.exportMapPred);
+    const exportFilteredPred = useMapStore(s => s.exportFilteredPred);
     const undoMap = useMapStore(s => s.undo);
     const redoMap = useMapStore(s => s.redo);
     const resetMapCurrentFrame = useMapStore(s => s.resetCurrentFrame);
     const { setImageId, setFolderId, setGtId, setPredId } = useMapContext();
     const openMapFolder = () => openMapFolderStore(id => {
-      console.log('[TopBar] Folder upload callback - folderId:', id);
       const storeImages = useMapStore.getState().images;
-      console.log('[TopBar] Images in store:', storeImages.length);
-      
       setFolderId(id);
-      console.log('[TopBar] setFolderId called with:', id);
       
       // Get the first image's ID from the store (images are already loaded)
       const firstImage = storeImages[0];
       if (firstImage) {
-        console.log('[TopBar] First image ID:', firstImage.id);
         setImageId(firstImage.id); // Select first image by its actual ID
         setCurrentImageIndex(0); // Set store index to 0
-      } else {
-        console.log('[TopBar] No first image found!');
       }
     });
     const openMapGT = () => openMapGTStore(id => {
@@ -39,7 +32,7 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
     const openMapPred = () => openMapPredStore(id => {
       setPredId(id);
     });
-    return { openMapFolder, openMapGT, openMapPred, exportMapPred, undoMap, redoMap, resetMapCurrentFrame };
+    return { openMapFolder, openMapGT, openMapPred, exportFilteredPred, undoMap, redoMap, resetMapCurrentFrame };
   } else {
     // MOTA 모드에서는 더미 핸들러 반환
     const dummy = () => {};
@@ -47,7 +40,7 @@ function useMapModeHandlers(mode: 'MOTA' | 'MAP') {
       openMapFolder: dummy,
       openMapGT: dummy,
       openMapPred: dummy,
-      exportMapPred: dummy,
+      exportFilteredPred: dummy,
       undoMap: dummy,
       redoMap: dummy,
       resetMapCurrentFrame: dummy,
@@ -64,7 +57,7 @@ export default function TopBar() {
   const { mode, setMode } = useMode();
   // MAP 모드용 핸들러 (mode 전달)
   const {
-    openMapFolder, openMapGT, openMapPred, exportMapPred,
+    openMapFolder, openMapGT, openMapPred, exportFilteredPred,
     undoMap, redoMap, resetMapCurrentFrame
   } = useMapModeHandlers(mode);
 
@@ -72,7 +65,7 @@ export default function TopBar() {
   const handleOpenFolder = mode === 'MOTA' ? openFrameDir      : openMapFolder;
   const handleGTUpload   = mode === 'MOTA' ? openGT            : openMapGT;
   const handlePredUpload = mode === 'MOTA' ? openPred          : openMapPred;
-  const handleExport     = mode === 'MOTA' ? exportModifiedPred: exportMapPred;
+  const handleExport     = mode === 'MOTA' ? exportModifiedPred: exportFilteredPred;
   const handleUndo       = mode === 'MOTA' ? undo              : undoMap;
   const handleRedo       = mode === 'MOTA' ? redo              : redoMap;
   const handleResetFrame = mode === 'MOTA' ? resetCurrentFrame : resetMapCurrentFrame;

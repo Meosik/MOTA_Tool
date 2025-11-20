@@ -136,7 +136,7 @@ export default function InteractiveCanvas({
       return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
     });
 
-    // Filter pred annotations by confidence, IoU, and visibility (using store values like MOTA mode)
+    // Filter pred annotations by confidence, IoU, and visibility
     const filteredPred = predToRender.filter(ann => {
       // Check visibility from control panel
       if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
@@ -147,7 +147,7 @@ export default function InteractiveCanvas({
       // Check visible categories
       if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
       
-      // Check IoU threshold from store - pred must have IoU >= threshold with at least one GT box
+      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
       if (iouThr > 0 && filteredGt.length > 0) {
         const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
         if (maxIoU < iouThr) return false;
