@@ -290,13 +290,13 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     setLocalConf(conf);
   }, [conf]);
   
-  // Throttle store updates (update store 100ms after user stops adjusting)
+  // Throttle store updates (update store 200ms after user stops adjusting for better performance)
   React.useEffect(() => {
     const timer = setTimeout(() => {
       if (localIou !== iou) {
         setIou(localIou);
       }
-    }, 100);
+    }, 200);
     return () => clearTimeout(timer);
   }, [localIou, iou, setIou]);
   
@@ -305,7 +305,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       if (localConf !== conf) {
         setConf(localConf);
       }
-    }, 100);
+    }, 200);
     return () => clearTimeout(timer);
   }, [localConf, conf, setConf]);
   

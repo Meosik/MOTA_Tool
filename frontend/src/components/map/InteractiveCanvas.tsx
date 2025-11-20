@@ -114,8 +114,8 @@ export default function InteractiveCanvas({
 
     // Filter GT annotations
     const filteredGt = gtAnnotations.filter(ann => {
-      // Check visibility from control panel
-      if (visibleInstances.size > 0 && !visibleInstances.has(`gt-${ann.id}`)) return false;
+      // Check visibility from control panel - if not in the set, hide it
+      if (!visibleInstances.has(`gt-${ann.id}`)) return false;
       
       // Check visible categories
       return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
@@ -123,8 +123,8 @@ export default function InteractiveCanvas({
 
     // Filter pred annotations by confidence, IoU, and visibility
     const filteredPred = predToRender.filter(ann => {
-      // Check visibility from control panel
-      if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
+      // Check visibility from control panel - if not in the set, hide it
+      if (!visibleInstances.has(`pred-${ann.id}`)) return false;
       
       // Check confidence threshold from store
       if ((ann.conf ?? 1) < confThr) return false;
