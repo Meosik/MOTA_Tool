@@ -92,17 +92,25 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
   // Initialize new instances as visible (don't reset existing visibility)
+  // Use annotation array lengths in dependencies to trigger re-run when they load
   React.useEffect(() => {
     const currentIds = new Set<string>();
-    gtAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      currentIds.add(`gt-${a.id}`);
-    });
-    predAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      currentIds.add(`pred-${a.id}`);
-    });
+    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id);
+    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id);
+    
+    gtForImage.forEach(a => currentIds.add(`gt-${a.id}`));
+    predForImage.forEach(a => currentIds.add(`pred-${a.id}`));
     
     console.log('[Visibility Init] Current image:', currentImage.id);
     console.log('[Visibility Init] Found instances:', currentIds.size, Array.from(currentIds).slice(0, 5));
+    console.log('[Visibility Init] GT for image:', gtForImage.length, 'Pred for image:', predForImage.length);
+    console.log('[Visibility Init] GT total:', gtAnnotations.length, 'Pred total:', predAnnotations.length);
+    
+    // Skip if no instances found (annotations not loaded yet)
+    if (currentIds.size === 0) {
+      console.log('[Visibility Init] No instances found - skipping initialization');
+      return;
+    }
     
     // Only add instances that aren't already in visibleInstances
     setVisibleInstances((prev: Set<string>) => {
