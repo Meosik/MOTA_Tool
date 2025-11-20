@@ -106,7 +106,17 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
     console.log('[Visibility Init] GT for image:', gtForImage.length, 'Pred for image:', predForImage.length);
     console.log('[Visibility Init] GT total:', gtAnnotations.length, 'Pred total:', predAnnotations.length);
     
-    // Skip if no instances found (annotations not loaded yet)
+    // Debug: Show sample image IDs from annotations
+    if (gtAnnotations.length > 0) {
+      const sampleGtIds = gtAnnotations.slice(0, 5).map(a => a.image_id);
+      console.log('[Visibility Init] Sample GT image_ids:', sampleGtIds);
+    }
+    if (predAnnotations.length > 0) {
+      const samplePredIds = predAnnotations.slice(0, 5).map(a => a.image_id);
+      console.log('[Visibility Init] Sample Pred image_ids:', samplePredIds);
+    }
+    
+    // Skip if no instances found (annotations not loaded yet or wrong image)
     if (currentIds.size === 0) {
       console.log('[Visibility Init] No instances found - skipping initialization');
       return;
