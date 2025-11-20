@@ -463,17 +463,8 @@ export default function InteractiveCanvas({
     });
   };
 
-
-
-  if (!imageUrl) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-400">
-        이미지를 선택하세요
-      </div>
-    );
-  }
-
   // Add wheel event listener with passive: false to allow preventDefault
+  // IMPORTANT: Must be placed before any early returns (Rules of Hooks)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -503,6 +494,14 @@ export default function InteractiveCanvas({
     canvas.addEventListener('wheel', wheelHandler, { passive: false });
     return () => canvas.removeEventListener('wheel', wheelHandler);
   }, [scale, offset]);
+
+  if (!imageUrl) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-400">
+        이미지를 선택하세요
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} className="flex-1 relative bg-gray-100">
