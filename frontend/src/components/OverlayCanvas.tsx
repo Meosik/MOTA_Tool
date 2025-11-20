@@ -73,6 +73,10 @@ export default function OverlayCanvas(){
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
   const fm = useMemo(() => frames[cur] || null, [frames, cur]);
+  
+  // Frame cache for rendered canvases (using OffscreenCanvas when available)
+  const frameCache = useRef<Map<string, ImageBitmap | HTMLCanvasElement>>(new Map());
+  const MAX_CACHED_FRAMES = 30;
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
   const [predBase, setPredBase] = useState<FlatBox[]>([]);
@@ -101,7 +105,20 @@ export default function OverlayCanvas(){
   useEffect(()=>{
     if (!fm) { setImg(null); return; }
     if (!fm.url) { setImg(null); return; }
-    getImage(fm.url).then(setImg).catch(()=>setImg(null));
+    
+    // Ensure image is fully decoded before setting
+    getImage(fm.url).then(async (loadedImg) => {
+      try {
+        // Force decode to happen now instead of during draw
+        if ('decode' in loadedImg) {
+          await loadedImg.decode();
+        }
+        setImg(loadedImg);
+      } catch {
+        setImg(loadedImg); // Fallback if decode fails
+      }
+    }).catch(()=>setImg(null));
+    
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
     setIdEdit(v=> ({...v, show:false}))
@@ -264,54 +281,117 @@ export default function OverlayCanvas(){
     }
   }, []);
 
-  // draw - optimized with batching
+  // draw - optimized with RAF throttling and frame caching
   useEffect(() => {
     const cnv = cnvRef.current;
     if (!cnv) return;
     const ctx = cnv.getContext('2d', { alpha: false }); // Disable alpha for better performance
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = cnv.clientWidth;
-    const cssH = cnv.clientHeight;
-    
-    if (cnv.width !== Math.floor(cssW * dpr) || cnv.height !== Math.floor(cssH * dpr)) {
-      cnv.width = Math.floor(cssW * dpr);
-      cnv.height = Math.floor(cssH * dpr);
-    }
-    
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
+    let rafId: number | null = null;
+    let needsRender = true;
 
-    // Draw image
-    if (img) {
-      ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
-    } else {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, cssW, cssH);
-    }
+    // Generate cache key for current frame state
+    const getCacheKey = () => {
+      const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
+      return `${fm?.i ?? 'none'}-${showGT}-${showPred}-${gtBoxes.length}-${predBoxes.length}-${boxKey}`;
+    };
 
-    const offset = { ox: layout.ox, oy: layout.oy };
+    const render = async () => {
+      if (!needsRender) return;
+      needsRender = false;
 
-    // Draw GT boxes (batched)
-    if (showGT && gtBoxes.length) {
-      drawBoxes(ctx, gtBoxes, true, layout.s, offset);
-    }
-
-    // Draw Pred boxes (batched)
-    if (showPred && predBoxes.length) {
-      // Adjust predBoxes for active/ghost state
-      const adjustedPredBoxes = predBoxes.map(b => {
-        if (activeId === b.id && ghostBox) {
-          return ghostBox;
-        }
-        return b;
-      });
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = cnv.clientWidth;
+      const cssH = cnv.clientHeight;
       
-      drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
-      drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
-    }
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles])
+      if (cnv.width !== Math.floor(cssW * dpr) || cnv.height !== Math.floor(cssH * dpr)) {
+        cnv.width = Math.floor(cssW * dpr);
+        cnv.height = Math.floor(cssH * dpr);
+      }
+      
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      // Try to use cached frame (only when not editing)
+      const cacheKey = getCacheKey();
+      const cached = activeId === null ? frameCache.current.get(cacheKey) : null;
+      
+      if (cached) {
+        // Draw cached frame
+        ctx.drawImage(cached as any, 0, 0, cssW, cssH);
+        return;
+      }
+
+      // Render frame from scratch
+      // Draw image
+      if (img) {
+        ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, cssW, cssH);
+      }
+
+      const offset = { ox: layout.ox, oy: layout.oy };
+
+      // Draw GT boxes (batched)
+      if (showGT && gtBoxes.length) {
+        drawBoxes(ctx, gtBoxes, true, layout.s, offset);
+      }
+
+      // Draw Pred boxes (batched)
+      if (showPred && predBoxes.length) {
+        // Adjust predBoxes for active/ghost state
+        const adjustedPredBoxes = predBoxes.map(b => {
+          if (activeId === b.id && ghostBox) {
+            return ghostBox;
+          }
+          return b;
+        });
+        
+        drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
+        drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
+      }
+
+      // Cache the rendered frame (only if not editing)
+      if (activeId === null && img) {
+        try {
+          const imageBitmap = await createImageBitmap(cnv);
+          frameCache.current.set(cacheKey, imageBitmap);
+          
+          // Limit cache size
+          if (frameCache.current.size > MAX_CACHED_FRAMES) {
+            const firstKey = frameCache.current.keys().next().value;
+            const oldBitmap = frameCache.current.get(firstKey);
+            if (oldBitmap && 'close' in oldBitmap) {
+              (oldBitmap as ImageBitmap).close();
+            }
+            frameCache.current.delete(firstKey);
+          }
+        } catch (e) {
+          // createImageBitmap not supported, skip caching
+        }
+      }
+    };
+
+    const scheduleRender = () => {
+      needsRender = true;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          render();
+          rafId = null;
+        });
+      }
+    };
+
+    scheduleRender();
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm])
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
