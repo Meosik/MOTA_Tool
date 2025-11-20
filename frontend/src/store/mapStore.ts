@@ -22,6 +22,10 @@ interface MapState {
   gtAnnotationId: string | null;
   predAnnotationId: string | null;
   
+  // Instance visibility control
+  visibleInstances: Set<string>;
+  setVisibleInstances: (instances: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
+  
   // Threshold values (like MOTA mode)
   iou: number;
   conf: number;
@@ -122,6 +126,12 @@ export const useMapStore = create<MapState>((set, get) => ({
   historyIndex: -1,
   gtAnnotationId: null,
   predAnnotationId: null,
+  
+  // Instance visibility (all visible by default)
+  visibleInstances: new Set<string>(),
+  setVisibleInstances: (instances) => set(state => ({
+    visibleInstances: typeof instances === 'function' ? instances(state.visibleInstances) : instances
+  })),
   
   // Threshold values (matching MOTA mode defaults)
   iou: 0.5,
