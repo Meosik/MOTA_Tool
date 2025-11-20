@@ -179,28 +179,55 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const getImageUrl = useMapStore(s => s.getImageUrl);
   const iou = useMapStore(s => s.iou);
 
-  // Cache mAP values calculated at initial load (with default IoU=0.5)
-  // These values don't change when thresholds are adjusted
+  // Virtual scrolling state
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  
+  // Cache mAP values calculated on-demand as items become visible
   const [cachedMapValues, setCachedMapValues] = React.useState<Map<number, number>>(new Map());
   
-  // Calculate mAP for all images only once when annotations or images change
+  // Item dimensions
+  const ITEM_HEIGHT = 60; // Approximate height of each item (48px content + padding/border)
+  const BUFFER_SIZE = 5; // Number of items to render above and below visible area
+  
+  // Calculate visible range based on scroll position
+  const containerHeight = 340; // maxHeight from style
+  const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER_SIZE);
+  const endIndex = Math.min(
+    images.length,
+    Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + BUFFER_SIZE
+  );
+  
+  const visibleImages = images.slice(startIndex, endIndex);
+  
+  // Calculate mAP for visible images only (lazy calculation)
   React.useEffect(() => {
     if (images.length === 0 || gtAnnotations.length === 0 || predAnnotations.length === 0) {
       return;
     }
     
-    const mapValues = new Map<number, number>();
-    const defaultIoU = 0.5; // Use default IoU for initial calculation
+    const defaultIoU = 0.5; // Use default IoU for calculation
     
-    images.forEach(image => {
+    visibleImages.forEach(image => {
+      // Skip if already cached
+      if (cachedMapValues.has(image.id)) return;
+      
       const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
       const predForImage = predAnnotations.filter(a => a.image_id === image.id);
       const imageMap = calculateImageAP(gtForImage, predForImage, defaultIoU);
-      mapValues.set(image.id, imageMap);
+      
+      setCachedMapValues(prev => {
+        const next = new Map(prev);
+        next.set(image.id, imageMap);
+        return next;
+      });
     });
-    
-    setCachedMapValues(mapValues);
-  }, [images, gtAnnotations, predAnnotations]);
+  }, [visibleImages, images, gtAnnotations, predAnnotations, cachedMapValues]);
+  
+  // Handle scroll events
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  };
 
   // Simple check - show placeholder if no folder or no images
   if (!folderId) {
@@ -219,61 +246,78 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
     );
   }
 
-  // Display list with thumbnails and metadata (scrollable, up to 8 visible)
+  // Display list with virtual scrolling - only render visible items
   return (
     <div className="h-full flex flex-col">
       <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
         <span>이미지 목록 ({images.length}개)</span>
       </div>
-      <div className="flex-1 overflow-y-auto" style={{maxHeight: '340px'}}>
-        <div className="space-y-1 p-2">
-          {images.map((image, idx) => {
-            const thumbnailUrl = getImageUrl(idx);
-            const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
-            const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
-            
-            // Use cached mAP value (calculated once at initial load)
-            const imageMap = cachedMapValues.get(image.id) || 0;
-            
-            return (
-              <button
-                key={image.id}
-                onClick={() => onImageSelect(image.id)}
-                className={`w-full text-left p-2 rounded border hover:bg-blue-50 ${
-                  currentImageId === image.id 
-                    ? 'bg-blue-100 border-blue-500 border-2' 
-                    : 'border-gray-200'
-                }`}
-              >
-                <div className="flex gap-2 items-center">
-                  {/* Thumbnail - 32x32 */}
-                  {thumbnailUrl ? (
-                    <img 
-                      src={thumbnailUrl} 
-                      alt={image.name}
-                      className="w-8 h-8 object-cover rounded flex-shrink-0 bg-gray-200"
-                    />
-                  ) : (
-                    <div className="w-8 h-8 bg-gray-200 rounded flex-shrink-0 flex items-center justify-center text-gray-400" style={{fontSize: '8px'}}>
-                      IMG
-                    </div>
-                  )}
-                  
-                  {/* Metadata */}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium truncate" title={image.name}>
-                      {image.name}
-                    </div>
-                    <div className="flex gap-2 text-xs mt-0.5">
-                      <span className="text-gray-600">mAP: {(imageMap * 100).toFixed(1)}%</span>
-                      <span className="text-green-600">GT: {gtCount}</span>
-                      <span className="text-orange-600">Pred: {predCount}</span>
+      <div 
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto" 
+        style={{maxHeight: '340px'}}
+        onScroll={handleScroll}
+      >
+        <div style={{ height: `${images.length * ITEM_HEIGHT}px`, position: 'relative' }}>
+          <div 
+            className="space-y-1 p-2"
+            style={{
+              position: 'absolute',
+              top: `${startIndex * ITEM_HEIGHT}px`,
+              left: 0,
+              right: 0
+            }}
+          >
+            {visibleImages.map((image, relativeIdx) => {
+              const idx = startIndex + relativeIdx;
+              const thumbnailUrl = getImageUrl(idx);
+              const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
+              const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
+              
+              // Use cached mAP value (calculated on-demand)
+              const imageMap = cachedMapValues.get(image.id) || 0;
+              
+              return (
+                <button
+                  key={image.id}
+                  onClick={() => onImageSelect(image.id)}
+                  className={`w-full text-left p-2 rounded border hover:bg-blue-50 ${
+                    currentImageId === image.id 
+                      ? 'bg-blue-100 border-blue-500 border-2' 
+                      : 'border-gray-200'
+                  }`}
+                  style={{ height: `${ITEM_HEIGHT - 4}px` }}
+                >
+                  <div className="flex gap-2 items-center">
+                    {/* Thumbnail - 32x32 */}
+                    {thumbnailUrl ? (
+                      <img 
+                        src={thumbnailUrl} 
+                        alt={image.name}
+                        className="w-8 h-8 object-cover rounded flex-shrink-0 bg-gray-200"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 bg-gray-200 rounded flex-shrink-0 flex items-center justify-center text-gray-400" style={{fontSize: '8px'}}>
+                        IMG
+                      </div>
+                    )}
+                    
+                    {/* Metadata */}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate" title={image.name}>
+                        {image.name}
+                      </div>
+                      <div className="flex gap-2 text-xs mt-0.5">
+                        <span className="text-gray-600">mAP: {(imageMap * 100).toFixed(1)}%</span>
+                        <span className="text-green-600">GT: {gtCount}</span>
+                        <span className="text-orange-600">Pred: {predCount}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </button>
-            );
-          })}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
       
