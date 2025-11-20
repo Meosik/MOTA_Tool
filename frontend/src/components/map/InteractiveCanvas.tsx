@@ -63,9 +63,10 @@ export default function InteractiveCanvas({
   onAnnotationUpdate,
   categories = {}
 }: InteractiveCanvasProps) {
-  // Read thresholds from store (like MOTA mode's OverlayCanvas)
+  // Read thresholds and visibility from store (like MOTA mode's OverlayCanvas)
   const iouThr = useMapStore(s => s.iou);
   const confThr = useMapStore(s => s.conf);
+  const visibleInstances = useMapStore(s => s.visibleInstances);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -127,12 +128,19 @@ export default function InteractiveCanvas({
     }
 
     // Filter GT annotations
-    const filteredGt = gtAnnotations.filter(ann =>
-      visibleCategories.size === 0 || visibleCategories.has(ann.category as any)
-    );
+    const filteredGt = gtAnnotations.filter(ann => {
+      // Check visibility from control panel
+      if (visibleInstances.size > 0 && !visibleInstances.has(`gt-${ann.id}`)) return false;
+      
+      // Check visible categories
+      return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
+    });
 
-    // Filter pred annotations by confidence and IoU (using store values like MOTA mode)
+    // Filter pred annotations by confidence, IoU, and visibility (using store values like MOTA mode)
     const filteredPred = predToRender.filter(ann => {
+      // Check visibility from control panel
+      if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
+      
       // Check confidence threshold from store
       if ((ann.conf ?? 1) < confThr) return false;
       
@@ -175,13 +183,13 @@ export default function InteractiveCanvas({
       ctx.fillStyle = isGt ? 'rgba(34,197,94,0.15)' : 'rgba(99,102,241,0.13)';
       ctx.fillRect(x, y, w, h);
 
-      // Draw label
-      if (ann.category !== undefined || ann.conf !== undefined) {
-        const label = `${categories[ann.category as any]?.name ?? ann.category ?? ''} ${ann.conf !== undefined ? ann.conf.toFixed(2) : ''}`.trim();
+      // Draw label (category name only, no confidence)
+      if (ann.category !== undefined) {
+        const label = categories[ann.category as any]?.name ?? ann.category ?? '';
         if (label) {
           ctx.fillStyle = color;
           ctx.font = '12px sans-serif';
-          ctx.fillText(label, x, y - 4);
+          ctx.fillText(String(label), x, y - 4);
         }
       }
 
@@ -206,7 +214,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, scale, offset, selectedAnnotation, categories, dragState]);
+  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, scale, offset, selectedAnnotation, categories, dragState]);
 
   useEffect(() => {
     if (!imageUrl) {

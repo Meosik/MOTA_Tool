@@ -18,6 +18,15 @@ interface MapState {
   editHistory: Array<{ type: 'gt' | 'pred'; annotations: Annotation[] }>;
   historyIndex: number;
   
+  // Server annotation IDs for syncing edits
+  gtAnnotationId: string | null;
+  predAnnotationId: string | null;
+  
+  // Instance visibility control
+  visibleInstances: Set<string>;
+  setVisibleInstances: (instances: Set<string>) => void;
+  toggleInstanceVisibility: (id: string) => void;
+  
   // Threshold values (like MOTA mode)
   iou: number;
   conf: number;
@@ -42,6 +51,7 @@ interface MapState {
   openMapGT: (cb?: (annotationId: string) => void) => void;
   openMapPred: (cb?: (annotationId: string) => void) => void;
   exportMapPred: () => void;
+  exportFilteredPred: () => void;  // Export with threshold filtering
 }
 
 // ObjectURL management (similar to frameStore)
@@ -65,6 +75,45 @@ function clearUrlCache() {
   urlCache.clear();
 }
 
+// Debounce mechanism for backend sync
+let syncTimeoutId: NodeJS.Timeout | null = null;
+const SYNC_DEBOUNCE_MS = 1000; // Wait 1 second after last edit before syncing
+
+async function syncAnnotationsToBackend(annotationId: string, annotations: Annotation[], categories: any) {
+  try {
+    // Convert to COCO format
+    const cocoData = {
+      annotations: annotations.map(ann => ({
+        id: ann.id,
+        image_id: ann.image_id,
+        category_id: ann.category,
+        bbox: ann.bbox,
+        score: ann.conf,
+        area: ann.bbox[2] * ann.bbox[3], // width * height
+        iscrowd: 0
+      })),
+      categories: categories ? Object.entries(categories).map(([id, name]) => ({
+        id: parseInt(id),
+        name: name as string
+      })) : []
+    };
+    
+    const response = await fetch(`${API_BASE}/annotations/${annotationId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cocoData)
+    });
+    
+    if (!response.ok) {
+      console.error('[mapStore] Failed to sync annotations to backend');
+    } else {
+      console.log('[mapStore] Annotations synced to backend:', annotationId);
+    }
+  } catch (err) {
+    console.error('[mapStore] Error syncing annotations:', err);
+  }
+}
+
 export const useMapStore = create<MapState>((set, get) => ({
   images: [],
   currentImageIndex: 0,
@@ -76,6 +125,18 @@ export const useMapStore = create<MapState>((set, get) => ({
   redoStack: [],
   editHistory: [],
   historyIndex: -1,
+  gtAnnotationId: null,
+  predAnnotationId: null,
+  
+  // Instance visibility
+  visibleInstances: new Set<string>(),
+  setVisibleInstances: (instances) => set({ visibleInstances: instances }),
+  toggleInstanceVisibility: (id) => set(state => {
+    const next = new Set(state.visibleInstances);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return { visibleInstances: next };
+  }),
   
   // Threshold values (matching MOTA mode defaults)
   iou: 0.5,
@@ -127,26 +188,42 @@ export const useMapStore = create<MapState>((set, get) => ({
     };
   }),
   
-  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => set(state => {
-    // id와 image_id가 모두 일치하는 어노테이션만 교체
-    const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
-    const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
-    // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
-    if (type === 'pred') {
-      console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
-      console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
-      const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
-      console.log('[updateAnnotation] Number of annotations changed:', changedCount);
-      console.log('[updateAnnotation] Total predictions:', annotations.length);
+  updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => {
+    set(state => {
+      // id와 image_id가 모두 일치하는 어노테이션만 교체
+      const annotations = type === 'gt' ? state.gtAnnotations : state.predAnnotations;
+      const updated = annotations.map(a => (a.id === ann.id && a.image_id === ann.image_id) ? { ...a, ...ann } : a);
+      // 디버깅: predAnnotations 배열 전체를 콘솔로 출력
+      if (type === 'pred') {
+        console.log('[updateAnnotation] Incoming annotation ID:', ann.id, 'image_id:', ann.image_id);
+        console.log('[updateAnnotation] First 5 pred IDs:', annotations.slice(0, 5).map(a => ({ id: a.id, image_id: a.image_id })));
+        const changedCount = updated.filter((a, idx) => a !== annotations[idx]).length;
+        console.log('[updateAnnotation] Number of annotations changed:', changedCount);
+        console.log('[updateAnnotation] Total predictions:', annotations.length);
+      }
+      const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+      newHistory.push({ type, annotations: updated });
+      return {
+        ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
+        editHistory: newHistory,
+        historyIndex: newHistory.length - 1,
+      };
+    });
+    
+    // Debounced sync to backend
+    const state = get();
+    const annotationId = type === 'gt' ? state.gtAnnotationId : state.predAnnotationId;
+    if (annotationId) {
+      if (syncTimeoutId) {
+        clearTimeout(syncTimeoutId);
+      }
+      syncTimeoutId = setTimeout(() => {
+        const currentState = get();
+        const annotations = type === 'gt' ? currentState.gtAnnotations : currentState.predAnnotations;
+        syncAnnotationsToBackend(annotationId, annotations, currentState.categories);
+      }, SYNC_DEBOUNCE_MS);
     }
-    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
-    newHistory.push({ type, annotations: updated });
-    return {
-      ...(type === 'gt' ? { gtAnnotations: updated } : { predAnnotations: updated }),
-      editHistory: newHistory,
-      historyIndex: newHistory.length - 1,
-    };
-  }),
+  },
   
   undo: () => set(state => {
     if (state.historyIndex <= 0) return state;
@@ -342,8 +419,29 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         get().setGT(annotations);
         if (categories) set({ categories });
-        const annotationId = `gt_${Date.now()}`;
-        alert(`GT 로드 성공: ${annotations.length}개 annotations`);
+        
+        // Upload to backend
+        const formData = new FormData();
+        formData.append('kind', 'gt');
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE}/annotations`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to upload GT annotations to backend');
+        }
+        
+        const result = await response.json();
+        const annotationId = result.annotation_id;
+        console.log('[mapStore] GT uploaded to backend:', annotationId);
+        
+        // Store annotation ID for future syncing
+        set({ gtAnnotationId: annotationId });
+        
+        alert(`GT 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
       } catch (err) {
         alert('GT 로드 실패: ' + err);
@@ -400,8 +498,29 @@ export const useMapStore = create<MapState>((set, get) => ({
         }
         get().setPred(annotations);
         if (categories) set({ categories });
-        const annotationId = `pred_${Date.now()}`;
-        alert(`Predictions 로드 성공: ${annotations.length}개 annotations`);
+        
+        // Upload to backend
+        const formData = new FormData();
+        formData.append('kind', 'pred');
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE}/annotations`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to upload Pred annotations to backend');
+        }
+        
+        const result = await response.json();
+        const annotationId = result.annotation_id;
+        console.log('[mapStore] Pred uploaded to backend:', annotationId);
+        
+        // Store annotation ID for future syncing
+        set({ predAnnotationId: annotationId });
+        
+        alert(`Predictions 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
         if (cb) cb(annotationId);
       } catch (err) {
         alert('Predictions 로드 실패: ' + err);
@@ -438,5 +557,74 @@ export const useMapStore = create<MapState>((set, get) => ({
     URL.revokeObjectURL(url);
     
     alert('Predictions exported successfully');
+  },
+  
+  exportFilteredPred: async () => {
+    const state = get();
+    if (state.predAnnotations.length === 0) {
+      alert('No predictions to export');
+      return;
+    }
+    
+    // Helper to calculate IoU
+    const calculateIoU = (box1: [number, number, number, number], box2: [number, number, number, number]): number => {
+      const [x1, y1, w1, h1] = box1;
+      const [x2, y2, w2, h2] = box2;
+      const xLeft = Math.max(x1, x2);
+      const yTop = Math.max(y1, y2);
+      const xRight = Math.min(x1 + w1, x2 + w2);
+      const yBottom = Math.min(y1 + h1, y2 + h2);
+      if (xRight < xLeft || yBottom < yTop) return 0.0;
+      const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+      const unionArea = w1 * h1 + w2 * h2 - intersectionArea;
+      return unionArea > 0 ? intersectionArea / unionArea : 0.0;
+    };
+    
+    // Filter predictions by confidence threshold and IoU threshold with GT
+    const filteredPreds = state.predAnnotations.filter(pred => {
+      // Filter by confidence threshold
+      if ((pred.conf || 0) < state.conf) return false;
+      
+      // Filter by IoU threshold - must have IoU >= threshold with at least one GT box
+      if (state.iou > 0 && state.gtAnnotations.length > 0) {
+        const gtForImage = state.gtAnnotations.filter(gt => 
+          !gt.image_id || gt.image_id === pred.image_id
+        );
+        
+        if (gtForImage.length > 0) {
+          const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(pred.bbox, gt.bbox)));
+          if (maxIoU < state.iou) return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    if (filteredPreds.length === 0) {
+      alert('No predictions pass the current thresholds');
+      return;
+    }
+    
+    // Convert to COCO format
+    const cocoFormat = filteredPreds.map((ann, idx) => ({
+      id: ann.id || idx + 1,
+      image_id: ann.image_id || 1,
+      category_id: ann.category || 1,
+      bbox: ann.bbox,
+      score: ann.conf || 1.0,
+    }));
+    
+    // Create blob and download
+    const blob = new Blob([JSON.stringify(cocoFormat, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `predictions_filtered_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    alert(`Filtered predictions exported: ${filteredPreds.length}/${state.predAnnotations.length} annotations (IoU≥${state.iou.toFixed(2)}, Conf≥${state.conf.toFixed(2)})`);
   },
 }));

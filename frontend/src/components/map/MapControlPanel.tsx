@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useMapMetrics } from '../../hooks/mapApi'
 import { useMapStore } from '../../store/mapStore'
+import { getCategoryNameById } from '../../constants/cocoCategories'
 
 // Calculate IoU (Intersection over Union) between two bounding boxes
 function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
@@ -25,11 +26,224 @@ function calculateIoU(box1: [number, number, number, number], box2: [number, num
   return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
+// Calculate simple AP for a single image
+function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number): number {
+  if (gtBoxes.length === 0) return predBoxes.length === 0 ? 1.0 : 0.0;
+  if (predBoxes.length === 0) return 0.0;
+  
+  // Sort predictions by confidence (descending)
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+  
+  let tp = 0;
+  const matched = new Set<number>();
+  
+  // For each prediction, find best matching GT
+  for (const pred of sortedPreds) {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+    
+    gtBoxes.forEach((gt, idx) => {
+      if (matched.has(idx)) return;
+      const iou = calculateIoU(pred.bbox, gt.bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = idx;
+      }
+    });
+    
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    }
+  }
+  
+  // Simple precision = TP / (TP + FP)
+  const precision = tp / sortedPreds.length;
+  // Simple recall = TP / total GT
+  const recall = tp / gtBoxes.length;
+  
+  // Simple AP as average of precision and recall
+  return (precision + recall) / 2;
+}
+
 interface MapControlPanelProps {
   projectId: string;
   annotationId: string | null;
   gtId?: string | null;
   predId?: string | null;
+}
+
+// Instance Visibility Panel Component
+function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations }: {
+  currentImage: any;
+  gtAnnotations: any[];
+  predAnnotations: any[];
+}) {
+  const visibleInstances = useMapStore(s => s.visibleInstances) || new Set<string>();
+  const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
+  
+  // Initialize all instances as visible
+  React.useEffect(() => {
+    const allIds = new Set<string>();
+    gtAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
+      allIds.add(`gt-${a.id}`);
+    });
+    predAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
+      allIds.add(`pred-${a.id}`);
+    });
+    setVisibleInstances(allIds);
+  }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
+  
+  // Group annotations by type and category
+  const groupedAnns = React.useMemo(() => {
+    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id);
+    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id);
+    
+    const gtByCategory = new Map<number, any[]>();
+    gtForImage.forEach(ann => {
+      const cat = ann.category || 0;
+      if (!gtByCategory.has(cat)) gtByCategory.set(cat, []);
+      gtByCategory.get(cat)!.push(ann);
+    });
+    
+    const predByCategory = new Map<number, any[]>();
+    predForImage.forEach(ann => {
+      const cat = ann.category || 0;
+      if (!predByCategory.has(cat)) predByCategory.set(cat, []);
+      predByCategory.get(cat)!.push(ann);
+    });
+    
+    return { gtByCategory, predByCategory };
+  }, [currentImage.id, gtAnnotations, predAnnotations]);
+  
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+  
+  const toggleInstance = (id: string) => {
+    setVisibleInstances(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  
+  const toggleAllInGroup = (type: 'gt' | 'pred', category?: number) => {
+    const instances: string[] = [];
+    const anns = type === 'gt' ? gtAnnotations : predAnnotations;
+    anns.filter(a => a.image_id === currentImage.id && (category === undefined || a.category === category))
+      .forEach(a => instances.push(`${type}-${a.id}`));
+    
+    const allVisible = instances.every(id => visibleInstances.has(id));
+    setVisibleInstances(prev => {
+      const next = new Set(prev);
+      instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
+      return next;
+    });
+  };
+  
+  return (
+    <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50 max-h-96 overflow-y-auto">
+      <div className="text-sm font-semibold mb-2">Instance Visibility</div>
+      
+      {/* GT Group */}
+      <div>
+        <div className="flex items-center gap-1 text-xs py-1">
+          <button onClick={() => toggleGroup('gt')} className="text-gray-600 hover:text-gray-900">
+            {expandedGroups.has('gt') ? '▼' : '▶'}
+          </button>
+          <input 
+            type="checkbox" 
+            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
+            onChange={() => toggleAllInGroup('gt')}
+            className="w-3 h-3"
+          />
+          <span className="font-medium text-green-700">GT ({Array.from(groupedAnns.gtByCategory.values()).flat().length})</span>
+        </div>
+        
+        {expandedGroups.has('gt') && Array.from(groupedAnns.gtByCategory.entries()).map(([cat, anns]) => (
+          <div key={`gt-cat-${cat}`} className="ml-3">
+            <div className="flex items-center gap-1 text-xs py-0.5">
+              <button onClick={() => toggleGroup(`gt-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
+                {expandedGroups.has(`gt-cat-${cat}`) ? '▼' : '▶'}
+              </button>
+              <input 
+                type="checkbox" 
+                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
+                onChange={() => toggleAllInGroup('gt', cat)}
+                className="w-3 h-3"
+              />
+              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
+            </div>
+            
+            {expandedGroups.has(`gt-cat-${cat}`) && anns.map(ann => (
+              <div key={`gt-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
+                <input 
+                  type="checkbox" 
+                  checked={visibleInstances.has(`gt-${ann.id}`)}
+                  onChange={() => toggleInstance(`gt-${ann.id}`)}
+                  className="w-3 h-3"
+                />
+                <span className="text-gray-500">ID: {ann.id}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      
+      {/* Pred Group */}
+      <div>
+        <div className="flex items-center gap-1 text-xs py-1">
+          <button onClick={() => toggleGroup('pred')} className="text-gray-600 hover:text-gray-900">
+            {expandedGroups.has('pred') ? '▼' : '▶'}
+          </button>
+          <input 
+            type="checkbox" 
+            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
+            onChange={() => toggleAllInGroup('pred')}
+            className="w-3 h-3"
+          />
+          <span className="font-medium text-orange-600">Pred ({Array.from(groupedAnns.predByCategory.values()).flat().length})</span>
+        </div>
+        
+        {expandedGroups.has('pred') && Array.from(groupedAnns.predByCategory.entries()).map(([cat, anns]) => (
+          <div key={`pred-cat-${cat}`} className="ml-3">
+            <div className="flex items-center gap-1 text-xs py-0.5">
+              <button onClick={() => toggleGroup(`pred-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
+                {expandedGroups.has(`pred-cat-${cat}`) ? '▼' : '▶'}
+              </button>
+              <input 
+                type="checkbox" 
+                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
+                onChange={() => toggleAllInGroup('pred', cat)}
+                className="w-3 h-3"
+              />
+              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
+            </div>
+            
+            {expandedGroups.has(`pred-cat-${cat}`) && anns.map(ann => (
+              <div key={`pred-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
+                <input 
+                  type="checkbox" 
+                  checked={visibleInstances.has(`pred-${ann.id}`)}
+                  onChange={() => toggleInstance(`pred-${ann.id}`)}
+                  className="w-3 h-3"
+                />
+                <span className="text-gray-500">ID: {ann.id} (conf: {(ann.conf || 0).toFixed(2)})</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
@@ -47,7 +261,13 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  const { data, isLoading, error } = useMapMetrics(effectiveGtId, effectivePredId!, conf, iou)
+  // Call backend API to calculate mAP automatically (always enabled)
+  const { data, isLoading, error } = useMapMetrics(
+    effectiveGtId, 
+    effectivePredId!, 
+    conf, 
+    iou
+  );
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -83,11 +303,15 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
+    // Calculate AP for current image
+    const imageAP = calculateImageAP(gtForImage, predForImage, iou);
+    
     return {
       gtCount: gtForImage.length,
       predCount: predForImage.length,
       imageName: currentImage.name,
       imageId: currentImage.id,
+      mAP: imageAP,
     };
   }, [currentImage, gtAnnotations, predAnnotations, conf, iou]);
 
@@ -101,11 +325,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
 
   return (
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
-      {/* Info message */}
-      <div className="text-sm text-neutral-500">
-        💡 TopBar에서 이미지 폴더, GT, Predictions를 업로드하고 내보내기를 할 수 있습니다.
-      </div>
-
       {/* IoU Threshold */}
       <div className="space-y-2">
         <div className="text-sm font-semibold">IoU Threshold</div>
@@ -164,20 +383,21 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
       </div>
 
-      {/* Current Image Statistics */}
+      {/* Instance Visibility Controls */}
+      {currentImage && (
+        <InstanceVisibilityPanel 
+          currentImage={currentImage} 
+          gtAnnotations={gtAnnotations} 
+          predAnnotations={predAnnotations}
+        />
+      )}
+
+      {/* Current Image mAP */}
       {imageStats && (
-        <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50">
-          <div className="text-sm font-semibold">Current Image</div>
-          <div className="text-xs text-neutral-700 truncate" title={imageStats.imageName}>
-            {imageStats.imageName}
-          </div>
-          <div className="text-xs text-neutral-600 font-mono">
-            ID: {imageStats.imageId}
-          </div>
-          <div className="flex justify-between text-xs mt-1">
-            <span className="text-green-600">GT: {imageStats.gtCount}</span>
-            <span className="text-orange-600">Pred: {imageStats.predCount}</span>
-          </div>
+        <div className="space-y-1">
+          <div className="text-sm font-semibold">Current Image mAP</div>
+          <div className="text-2xl font-mono">{(imageStats.mAP * 100).toFixed(2)}%</div>
+          <div className="text-xs text-neutral-600">Average Precision for this image</div>
         </div>
       )}
 
@@ -190,7 +410,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         )}
         
         {isLoading ? (
-          <div className="text-xs text-neutral-600">Loading metrics...</div>
+          <div className="text-xs text-neutral-600">Calculating metrics...</div>
         ) : data ? (
           <>
             <div className="text-2xl font-mono">{typeof data.mAP === 'number' ? (data.mAP * 100).toFixed(2) + '%' : '—'}</div>
@@ -219,7 +439,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             )}
           </>
         ) : (
-          <div className="text-xs text-neutral-600">No metrics available. Upload GT and Predictions to calculate.</div>
+          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하면 전체 데이터셋 mAP가 계산됩니다.</div>
         )}
       </div>
     </aside>
