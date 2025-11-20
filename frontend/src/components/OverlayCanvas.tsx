@@ -281,7 +281,7 @@ export default function OverlayCanvas(){
     }
   }, []);
 
-  // draw - optimized with RAF throttling and frame caching
+  // draw - optimized with RAF throttling, OffscreenCanvas, and frame caching
   useEffect(() => {
     const cnv = cnvRef.current;
     if (!cnv) return;
@@ -295,6 +295,58 @@ export default function OverlayCanvas(){
     const getCacheKey = () => {
       const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
       return `${fm?.i ?? 'none'}-${showGT}-${showPred}-${gtBoxes.length}-${predBoxes.length}-${boxKey}`;
+    };
+
+    // Render to OffscreenCanvas (or fallback to regular canvas) to avoid blocking main thread
+    const renderToOffscreen = (width: number, height: number, dpr: number) => {
+      let offscreen: OffscreenCanvas | HTMLCanvasElement;
+      let offscreenCtx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
+
+      // Try to use OffscreenCanvas for better performance
+      if (typeof OffscreenCanvas !== 'undefined') {
+        offscreen = new OffscreenCanvas(Math.floor(width * dpr), Math.floor(height * dpr));
+        offscreenCtx = offscreen.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
+      } else {
+        // Fallback to regular canvas
+        offscreen = document.createElement('canvas');
+        offscreen.width = Math.floor(width * dpr);
+        offscreen.height = Math.floor(height * dpr);
+        offscreenCtx = offscreen.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+      }
+
+      offscreenCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      offscreenCtx.clearRect(0, 0, width, height);
+
+      // Draw image
+      if (img) {
+        offscreenCtx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+      } else {
+        offscreenCtx.fillStyle = '#ffffff';
+        offscreenCtx.fillRect(0, 0, width, height);
+      }
+
+      const offset = { ox: layout.ox, oy: layout.oy };
+
+      // Draw GT boxes (batched)
+      if (showGT && gtBoxes.length) {
+        drawBoxes(offscreenCtx, gtBoxes, true, layout.s, offset);
+      }
+
+      // Draw Pred boxes (batched)
+      if (showPred && predBoxes.length) {
+        // Adjust predBoxes for active/ghost state
+        const adjustedPredBoxes = predBoxes.map(b => {
+          if (activeId === b.id && ghostBox) {
+            return ghostBox;
+          }
+          return b;
+        });
+        
+        drawBoxes(offscreenCtx, adjustedPredBoxes, false, layout.s, offset);
+        drawPredHandles(offscreenCtx, predBoxes, activeId, ghostBox, layout.s, offset);
+      }
+
+      return offscreen;
     };
 
     const render = async () => {
@@ -318,46 +370,29 @@ export default function OverlayCanvas(){
       const cached = activeId === null ? frameCache.current.get(cacheKey) : null;
       
       if (cached) {
-        // Draw cached frame
+        // Draw cached frame - fast blit operation
         ctx.drawImage(cached as any, 0, 0, cssW, cssH);
         return;
       }
 
-      // Render frame from scratch
-      // Draw image
-      if (img) {
-        ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
-      } else {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, cssW, cssH);
-      }
-
-      const offset = { ox: layout.ox, oy: layout.oy };
-
-      // Draw GT boxes (batched)
-      if (showGT && gtBoxes.length) {
-        drawBoxes(ctx, gtBoxes, true, layout.s, offset);
-      }
-
-      // Draw Pred boxes (batched)
-      if (showPred && predBoxes.length) {
-        // Adjust predBoxes for active/ghost state
-        const adjustedPredBoxes = predBoxes.map(b => {
-          if (activeId === b.id && ghostBox) {
-            return ghostBox;
-          }
-          return b;
-        });
-        
-        drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
-        drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
-      }
+      // Render frame using OffscreenCanvas
+      const offscreen = renderToOffscreen(cssW, cssH, dpr);
+      
+      // Draw the offscreen canvas to main canvas
+      ctx.drawImage(offscreen as any, 0, 0, cssW, cssH);
 
       // Cache the rendered frame (only if not editing)
       if (activeId === null && img) {
         try {
-          const imageBitmap = await createImageBitmap(cnv);
-          frameCache.current.set(cacheKey, imageBitmap);
+          // Convert OffscreenCanvas to ImageBitmap for efficient caching
+          let bitmap: ImageBitmap;
+          if (offscreen instanceof OffscreenCanvas) {
+            bitmap = offscreen.transferToImageBitmap();
+          } else {
+            bitmap = await createImageBitmap(offscreen);
+          }
+          
+          frameCache.current.set(cacheKey, bitmap);
           
           // Limit cache size
           if (frameCache.current.size > MAX_CACHED_FRAMES) {
@@ -369,7 +404,7 @@ export default function OverlayCanvas(){
             frameCache.current.delete(firstKey);
           }
         } catch (e) {
-          // createImageBitmap not supported, skip caching
+          // Bitmap creation not supported, skip caching
         }
       }
     };
