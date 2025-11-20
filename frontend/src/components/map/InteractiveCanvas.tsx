@@ -225,14 +225,11 @@ export default function InteractiveCanvas({
 
   useEffect(() => {
     if (!imageUrl) {
-      console.log('InteractiveCanvas: No imageUrl provided');
       return;
     }
 
-    console.log('InteractiveCanvas: Loading image from URL:', imageUrl.substring(0, 50));
     const img = new Image();
     img.onload = () => {
-      console.log('InteractiveCanvas: Image loaded successfully', img.width, 'x', img.height);
       imageRef.current = img;
       const canvas = canvasRef.current;
       const container = containerRef.current;
@@ -250,11 +247,7 @@ export default function InteractiveCanvas({
           x: (canvas.width - img.width * newScale) / 2,
           y: (canvas.height - img.height * newScale) / 2
         });
-        console.log('InteractiveCanvas: Canvas setup complete', { scale: newScale, offset: { x: (canvas.width - img.width * newScale) / 2, y: (canvas.height - img.height * newScale) / 2 } });
       }
-    };
-    img.onerror = (err) => {
-      console.error('InteractiveCanvas: Image loading failed', err);
     };
     img.src = imageUrl;
   }, [imageUrl]);

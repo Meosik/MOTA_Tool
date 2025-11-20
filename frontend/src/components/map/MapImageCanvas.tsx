@@ -105,18 +105,14 @@ export default function MapImageCanvas({
   // Load image when URL changes
   useEffect(()=>{
     if (!displayImageUrl) { 
-      console.log('MapImageCanvas: No displayImageUrl');
       setImg(null); 
       return; 
     }
-    console.log('MapImageCanvas: Loading image from:', displayImageUrl.substring(0, 50));
     const image = new Image();
     image.onload = () => {
-      console.log('MapImageCanvas: Image loaded successfully', image.width, 'x', image.height);
       setImg(image);
     };
-    image.onerror = (err) => {
-      console.error('MapImageCanvas: Image loading failed', err);
+    image.onerror = () => {
       setImg(null);
     };
     image.src = displayImageUrl;
@@ -141,7 +137,6 @@ export default function MapImageCanvas({
     // Draw image
     if (img) {
       ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
-      console.log('MapImageCanvas: Drew image', { layout });
     } else { 
       ctx.fillStyle='#f7f7f7'; 
       ctx.fillRect(0,0,cssW,cssH); 
@@ -171,7 +166,6 @@ export default function MapImageCanvas({
         }
         drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 1.0)');
       }
-      console.log('MapImageCanvas: Drew', gt.length, 'GT boxes (green)');
     }
 
     // Draw Pred boxes (ON TOP of image)
@@ -198,10 +192,7 @@ export default function MapImageCanvas({
         }
         drawIdLabel(ctx, label, p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 1.0)');
       }
-      console.log('MapImageCanvas: Drew', pred.length, 'Pred boxes (orange)');
     }
-
-    console.log('MapImageCanvas: Finished drawing', { gtCount: gt.length, predCount: pred.length });
   }, [img, layout.W, layout.H, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gt, pred]);
 
   if (!displayImageUrl && !currentImage) {
