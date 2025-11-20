@@ -291,9 +291,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const imageStats = React.useMemo(() => {
     if (!currentImage) return null;
     
-    console.log('MapControlPanel: Calculating stats for image', currentImage.id);
-    console.log('MapControlPanel: Total GT', gtAnnotations.length, 'Total Pred', predAnnotations.length);
-    
     // Filter GT for current image
     const gtForImage = gtAnnotations.filter(a => {
       // If no image_id, show for all images
@@ -302,7 +299,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       return a.image_id === currentImage.id;
     });
     
-    // Filter pred annotations by image, confidence, and IoU
+    // Filter pred annotations by image, confidence, and IoU (optimized)
     const predForImage = predAnnotations.filter(a => {
       // Check image_id
       if (a.image_id && a.image_id !== currentImage.id) return false;
@@ -312,14 +309,17 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       
       // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
       if (iou > 0 && gtForImage.length > 0) {
-        const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(a.bbox, gt.bbox)));
+        let maxIoU = 0;
+        for (const gt of gtForImage) {
+          const currentIoU = calculateIoU(a.bbox, gt.bbox);
+          if (currentIoU > maxIoU) maxIoU = currentIoU;
+          if (maxIoU >= iou) break; // Early exit if threshold met
+        }
         if (maxIoU < iou) return false;
       }
       
       return true;
     });
-    
-    console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
     // Calculate AP for current image
     const imageAP = calculateImageAP(gtForImage, predForImage, iou);

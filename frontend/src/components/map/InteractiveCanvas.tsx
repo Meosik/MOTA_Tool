@@ -102,31 +102,8 @@ export default function InteractiveCanvas({
     return categoryId !== undefined ? CATEGORY_COLORS[categoryId % CATEGORY_COLORS.length] : '#6366f1';
   };
 
-  const drawAnnotations = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    const img = imageRef.current;
-    
-    if (!canvas || !ctx || !img || !img.complete) {
-      console.log('InteractiveCanvas: Cannot draw -', { 
-        hasCanvas: !!canvas, 
-        hasCtx: !!ctx, 
-        hasImg: !!img, 
-        imgComplete: img?.complete 
-      });
-      return;
-    }
-
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw image
-    ctx.save();
-    ctx.translate(offset.x, offset.y);
-    ctx.scale(scale, scale);
-    ctx.drawImage(img, 0, 0);
-    ctx.restore();
-
+  // Memoize filtered annotations to avoid recalculating IoU on every render
+  const filteredAnnotations = useMemo(() => {
     // If dragging, replace the annotation being dragged with the updated version from dragState
     let predToRender = predAnnotations;
     if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
@@ -157,20 +134,42 @@ export default function InteractiveCanvas({
       
       // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
       if (iouThr > 0 && filteredGt.length > 0) {
-        const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
+        let maxIoU = 0;
+        for (const gt of filteredGt) {
+          const iou = calculateIoU(ann.bbox, gt.bbox);
+          if (iou > maxIoU) maxIoU = iou;
+        }
         if (maxIoU < iouThr) return false;
       }
       
       return true;
     });
 
-    const allAnnotations = [...filteredGt, ...filteredPred];
+    return { filteredGt, filteredPred };
+  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, dragState]);
+
+  const drawAnnotations = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    const img = imageRef.current;
     
-    console.log('InteractiveCanvas: Drawing', { 
-      gtCount: filteredGt.length, 
-      predCount: filteredPred.length,
-      totalAnnotations: allAnnotations.length
-    });
+    if (!canvas || !ctx || !img || !img.complete) {
+      return;
+    }
+
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw image
+    ctx.save();
+    ctx.translate(offset.x, offset.y);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    ctx.restore();
+
+    const { filteredGt, filteredPred } = filteredAnnotations;
+
+    const allAnnotations = [...filteredGt, ...filteredPred];
 
     allAnnotations.forEach(ann => {
       const [x, y, w, h] = ann.bbox;
@@ -222,7 +221,7 @@ export default function InteractiveCanvas({
 
       ctx.restore();
     });
-  }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, scale, offset, selectedAnnotation, categories, dragState]);
+  }, [filteredAnnotations, scale, offset, selectedAnnotation, categories]);
 
   useEffect(() => {
     if (!imageUrl) {
