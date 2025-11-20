@@ -79,7 +79,15 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   gtAnnotations: any[];
   predAnnotations: any[];
 }) {
-  const visibleInstances = useMapStore(s => s.visibleInstances) || new Set<string>();
+  const visibleInstancesRaw = useMapStore(s => s.visibleInstances);
+  // Ensure visibleInstances is always a Set (convert if needed)
+  const visibleInstances = React.useMemo(() => {
+    if (!visibleInstancesRaw) return new Set<string>();
+    if (visibleInstancesRaw instanceof Set) return visibleInstancesRaw;
+    // If it's not a Set (e.g., serialized to object), convert it
+    return new Set<string>(Object.keys(visibleInstancesRaw));
+  }, [visibleInstancesRaw]);
+  
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   

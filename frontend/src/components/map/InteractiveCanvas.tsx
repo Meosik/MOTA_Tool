@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Annotation } from '../../types/annotation';
 import { useMapStore } from '../../store/mapStore';
 import { getCategoryIdByName, getCategoryNameById } from '../../constants/cocoCategories';
@@ -66,7 +66,15 @@ export default function InteractiveCanvas({
   // Read thresholds and visibility from store (like MOTA mode's OverlayCanvas)
   const iouThr = useMapStore(s => s.iou);
   const confThr = useMapStore(s => s.conf);
-  const visibleInstances = useMapStore(s => s.visibleInstances);
+  const visibleInstancesRaw = useMapStore(s => s.visibleInstances);
+  // Ensure visibleInstances is always a Set (convert if needed)
+  const visibleInstances = useMemo(() => {
+    if (!visibleInstancesRaw) return new Set<string>();
+    if (visibleInstancesRaw instanceof Set) return visibleInstancesRaw;
+    // If it's not a Set (e.g., serialized to object), convert it
+    return new Set<string>(Object.keys(visibleInstancesRaw));
+  }, [visibleInstancesRaw]);
+  
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
