@@ -30,25 +30,29 @@ This document describes the improvements made to the MAP mode functionality to a
 - `frontend/src/components/map/MapControlPanel.tsx` - Added button and manual trigger logic
 
 ### 3. Threshold Application Optimization
-**Problem**: Applying IoU threshold to current image display was causing performance issues.
+**Problem**: Image list mAP values were recalculating on every threshold change, causing performance issues.
 
 **Solution**:
-- **Current Image Display**: Only confidence threshold is applied
-  - InteractiveCanvas: Shows all predictions above confidence threshold
-  - MapControlPanel current image stats: Uses confidence threshold only
+- **Current Image Display**: Both confidence and IoU thresholds are applied
+  - InteractiveCanvas: Shows predictions with conf ≥ threshold AND IoU ≥ threshold with GT
+  - MapControlPanel current image stats: Filters by both thresholds
+- **Image List mAP**: Calculated once at initial load with default IoU=0.5
+  - Cached and not recalculated when thresholds change
+  - Provides stable performance metric for navigation
 - **Export and Overall mAP**: Both confidence and IoU thresholds are applied
   - exportFilteredPred: Filters by both thresholds
   - Backend mAP calculation: Uses both thresholds
 
 **Design Rationale**:
-- IoU threshold requires comparing predictions against GT boxes, which is computationally expensive
-- For interactive editing, users need to see all potential predictions to make informed decisions
-- Filtering by IoU is deferred until final export or overall mAP calculation
-- This significantly improves UI responsiveness when adjusting thresholds
+- Current image needs real-time filtering for users to see effect of threshold adjustments
+- Image list mAP values are for reference during navigation, not for threshold tuning
+- Calculating mAP for all images on every threshold change is expensive and unnecessary
+- Overall mAP button provides accurate results with current thresholds when needed
 
 **Files Modified**:
-- `frontend/src/components/map/InteractiveCanvas.tsx` - Removed IoU filtering from canvas rendering
-- `frontend/src/components/map/MapControlPanel.tsx` - Removed IoU filtering from current image stats
+- `frontend/src/components/map/InteractiveCanvas.tsx` - Applies both IoU and confidence filtering
+- `frontend/src/components/map/MapControlPanel.tsx` - Applies both thresholds to current image stats
+- `frontend/src/components/map/MapImageList.tsx` - Caches mAP values calculated at initial load
 
 ## Usage
 
@@ -69,10 +73,11 @@ This document describes the improvements made to the MAP mode functionality to a
 4. Backend will calculate mAP across all images using both thresholds
 
 ### Current Image View
-- Shows all predictions above confidence threshold (regardless of IoU)
+- Shows predictions with confidence ≥ threshold AND IoU ≥ threshold with GT
 - Allows editing of bboxes and categories
 - Displays current image mAP for quick feedback
 - Updates instantly when threshold changes
+- Image list mAP values remain stable (calculated once at load)
 
 ## Technical Details
 
@@ -84,8 +89,9 @@ This document describes the improvements made to the MAP mode functionality to a
 
 ### Performance Improvements
 - Eliminated automatic backend API calls on threshold changes
-- Reduced filtering complexity for current image display
-- Only IoU filtering happens during export (O(n) operation once)
+- Image list mAP values cached (calculated once at initial load)
+- Current image filtering happens in real-time (fast for single image)
+- Overall mAP calculation only on button click
 - Improved UI responsiveness significantly
 
 ### Backward Compatibility
@@ -118,9 +124,10 @@ This document describes the improvements made to the MAP mode functionality to a
 
 ## Known Limitations
 
-1. Current image mAP uses IoU threshold for matching but not for filtering
-   - This means the displayed prediction count may differ from what's exported
-   - This is intentional for performance reasons
+1. Image list mAP values use default IoU=0.5
+   - These values don't update when you adjust the IoU slider
+   - They serve as reference metrics for navigation
+   - For accurate mAP with custom thresholds, use "Calculate Overall mAP" button
 
 2. Overall mAP button requires manual click
    - Users must remember to click it to see updated metrics

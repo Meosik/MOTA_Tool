@@ -102,11 +102,23 @@ Current Image Display:
    ↓
 Filter by confidence threshold ✓
    ↓
-Skip IoU filtering ⚡
+Filter by IoU threshold ✓
    ↓
-✅ Fast rendering
-✅ Shows more predictions for editing
-✅ Instant feedback
+✅ Fast rendering (single image only)
+✅ Real-time threshold feedback
+✅ Instant updates
+
+---
+
+Image List mAP:
+   ↓
+Calculate once at load (IoU=0.5) ✓
+   ↓
+Cache values ✓
+   ↓
+✅ Stable reference metrics
+✅ No recalculation on threshold changes
+✅ Fast navigation
 
 ---
 
@@ -164,11 +176,13 @@ Filter by IoU threshold ✓
 - Adjust slider → 2-3 second lag → UI updates
 - Backend API call on EVERY change
 - Calculations for 100+ images each time
+- Image list mAP recalculated for all images
 
 **After:**
-- Adjust slider → Instant UI update ⚡
+- Adjust slider → Instant current image update ⚡
 - No backend API calls
-- Current image only updates
+- Current image filters update in real-time
+- Image list mAP values remain stable (cached)
 
 ### Export Operation
 
@@ -213,15 +227,19 @@ Filter by IoU threshold ✓
        ┌────────────────────────┘
        │
        ├─→ InteractiveCanvas
-       │   • Shows predictions with conf ≥ threshold
-       │   • NO IoU filtering
-       │   • Instant updates ⚡
+       │   • Shows predictions with conf ≥ threshold AND IoU ≥ threshold
+       │   • Applies both filters
+       │   • Instant updates ⚡ (single image only)
        │
        ├─→ MapControlPanel Current Image mAP
-       │   • Uses predictions with conf ≥ threshold
-       │   • NO IoU filtering
-       │   • IoU used for AP calculation only
-       │   • Instant updates ⚡
+       │   • Uses predictions with conf ≥ threshold AND IoU ≥ threshold
+       │   • Applies both filters
+       │   • Instant updates ⚡ (single image only)
+       │
+       ├─→ MapImageList mAP values
+       │   • Calculated once at initial load (IoU=0.5)
+       │   • Cached and stable
+       │   • No recalculation on threshold changes ⚡
        │
        ├─→ Export Button (when clicked)
        │   • Reads mapStore.predAnnotations
@@ -242,7 +260,8 @@ Filter by IoU threshold ✓
 ## Key Takeaways
 
 1. **Export is now correct** - applies all thresholds and modifications
-2. **UI is much faster** - no automatic backend calls
-3. **Current image shows more** - helps with editing decisions
-4. **Final outputs are filtered** - export and overall mAP use both thresholds
-5. **User has control** - manual button for expensive operations
+2. **UI is much faster** - no automatic backend calls, cached image list mAP
+3. **Current image is real-time** - both thresholds applied instantly for single image
+4. **Image list is stable** - mAP values calculated once, don't change with sliders
+5. **Final outputs are accurate** - export and overall mAP use current thresholds
+6. **User has control** - manual button for expensive overall mAP calculation

@@ -179,6 +179,29 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const getImageUrl = useMapStore(s => s.getImageUrl);
   const iou = useMapStore(s => s.iou);
 
+  // Cache mAP values calculated at initial load (with default IoU=0.5)
+  // These values don't change when thresholds are adjusted
+  const [cachedMapValues, setCachedMapValues] = React.useState<Map<number, number>>(new Map());
+  
+  // Calculate mAP for all images only once when annotations or images change
+  React.useEffect(() => {
+    if (images.length === 0 || gtAnnotations.length === 0 || predAnnotations.length === 0) {
+      return;
+    }
+    
+    const mapValues = new Map<number, number>();
+    const defaultIoU = 0.5; // Use default IoU for initial calculation
+    
+    images.forEach(image => {
+      const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
+      const predForImage = predAnnotations.filter(a => a.image_id === image.id);
+      const imageMap = calculateImageAP(gtForImage, predForImage, defaultIoU);
+      mapValues.set(image.id, imageMap);
+    });
+    
+    setCachedMapValues(mapValues);
+  }, [images, gtAnnotations, predAnnotations]);
+
   // Simple check - show placeholder if no folder or no images
   if (!folderId) {
     return (
@@ -209,10 +232,8 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
             const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
             const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
             
-            // Calculate mAP for this image
-            const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
-            const predForImage = predAnnotations.filter(a => a.image_id === image.id);
-            const imageMap = calculateImageAP(gtForImage, predForImage, iou);
+            // Use cached mAP value (calculated once at initial load)
+            const imageMap = cachedMapValues.get(image.id) || 0;
             
             return (
               <button
