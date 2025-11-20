@@ -127,7 +127,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   };
   
   const toggleInstance = (id: string) => {
-    setVisibleInstances(prev => {
+    setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -142,7 +142,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       .forEach(a => instances.push(`${type}-${a.id}`));
     
     const allVisible = instances.every(id => visibleInstances.has(id));
-    setVisibleInstances(prev => {
+    setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
       return next;
