@@ -186,72 +186,132 @@ export default function OverlayCanvas(){
     return null;
   }
 
-  // draw
-  useEffect(()=>{
-    const cnv = cnvRef.current; if (!cnv) return;
-    const ctx = cnv.getContext('2d'); if (!ctx) return;
+  // Memoize drawing functions for better performance
+  const drawBoxes = useCallback((
+    ctx: CanvasRenderingContext2D,
+    boxes: (FlatBox | Box)[],
+    isGT: boolean,
+    scale: number,
+    offset: { ox: number; oy: number }
+  ) => {
+    const strokeColor = isGT ? COLORS.gtStroke : COLORS.predStroke;
+    const fillColor = isGT ? COLORS.gtFill : COLORS.predFill;
+    const bgColor = isGT ? 'rgba(80, 220, 120, 0.95)' : 'rgba(255, 140, 0, 0.95)';
+
+    ctx.lineWidth = LINE_W;
+    ctx.strokeStyle = strokeColor;
+    ctx.fillStyle = fillColor;
+
+    // Batch drawing operations
+    ctx.save();
+    for (const box of boxes) {
+      const isFlatBox = 'bbox' in box;
+      const [x, y, w, h] = isFlatBox 
+        ? (box as FlatBox).bbox as [number, number, number, number]
+        : [box.x, box.y, box.w, box.h];
+      const id = isFlatBox ? (box as FlatBox).id : box.id;
+
+      const px = offset.ox + x * scale;
+      const py = offset.oy + y * scale;
+      const cw = w * scale;
+      const ch = h * scale;
+
+      // Draw box
+      ctx.beginPath();
+      ctx.rect(px, py, cw, ch);
+      ctx.fill();
+      ctx.stroke();
+
+      // Draw label
+      drawIdLabel(ctx, String(id), px, Math.max(12, py - 4), bgColor);
+    }
+    ctx.restore();
+  }, []);
+
+  const drawPredHandles = useCallback((
+    ctx: CanvasRenderingContext2D,
+    boxes: Box[],
+    activeId: number | null,
+    ghostBox: Box | null,
+    scale: number,
+    offset: { ox: number; oy: number }
+  ) => {
+    ctx.fillStyle = COLORS.predStroke;
+    
+    for (const b of boxes) {
+      const isActive = activeId === b.id && ghostBox;
+      const rb = isActive ? ghostBox! : b;
+      const px = offset.ox + rb.x * scale;
+      const py = offset.oy + rb.y * scale;
+      const cw = rb.w * scale;
+      const ch = rb.h * scale;
+
+      const handles = [
+        { x: px, y: py },
+        { x: px + cw, y: py },
+        { x: px, y: py + ch },
+        { x: px + cw, y: py + ch },
+      ];
+
+      for (const h of handles) {
+        ctx.fillRect(
+          h.x - HANDLE_SIZE / 2,
+          h.y - HANDLE_SIZE / 2,
+          HANDLE_SIZE,
+          HANDLE_SIZE
+        );
+      }
+    }
+  }, []);
+
+  // draw - optimized with batching
+  useEffect(() => {
+    const cnv = cnvRef.current;
+    if (!cnv) return;
+    const ctx = cnv.getContext('2d', { alpha: false }); // Disable alpha for better performance
+    if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const cssW = cnv.clientWidth, cssH = cnv.clientHeight;
-    if (cnv.width !== Math.floor(cssW*dpr) || cnv.height !== Math.floor(cssH*dpr)) {
-      cnv.width = Math.floor(cssW*dpr);
-      cnv.height = Math.floor(cssH*dpr);
+    const cssW = cnv.clientWidth;
+    const cssH = cnv.clientHeight;
+    
+    if (cnv.width !== Math.floor(cssW * dpr) || cnv.height !== Math.floor(cssH * dpr)) {
+      cnv.width = Math.floor(cssW * dpr);
+      cnv.height = Math.floor(cssH * dpr);
     }
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.clearRect(0,0,cssW,cssH);
+    
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
 
-    if (img) ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
-    else { ctx.fillStyle='#f7f7f7'; ctx.fillRect(0,0,cssW,cssH); }
-
-    // GT
-    if (showGT && gtBoxes.length){
-      ctx.lineWidth = LINE_W;
-      ctx.strokeStyle = COLORS.gtStroke;
-      ctx.fillStyle   = COLORS.gtFill;
-
-      for (const g of gtBoxes){
-        const [x,y,w,h] = g.bbox as [number,number,number,number];
-        const p = toCanvas({x,y});
-        const cw = w*layout.s, ch = h*layout.s;
-
-        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke();
-        drawIdLabel(ctx, String(g.id), p.x, Math.max(12, p.y - 4), 'rgba(80, 220, 120, 0.95)');
-
-        ctx.strokeStyle = COLORS.gtStroke;
-        ctx.fillStyle   = COLORS.gtFill;
-      }
+    // Draw image
+    if (img) {
+      ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+    } else {
+      ctx.fillStyle = '#f7f7f7';
+      ctx.fillRect(0, 0, cssW, cssH);
     }
 
-    // Pred
-    if (showPred && predBoxes.length){
-      for (const b of predBoxes){
-        const isActive = activeId === b.id && ghostBox
-        const rb = isActive ? ghostBox! : b
-        const p = toCanvas({x:rb.x, y:rb.y})
-        const cw = rb.w*layout.s, ch = rb.h*layout.s
+    const offset = { ox: layout.ox, oy: layout.oy };
 
-        ctx.lineWidth = LINE_W
-        ctx.strokeStyle = COLORS.predStroke
-        ctx.fillStyle   = COLORS.predFill
-        ctx.beginPath(); ctx.rect(p.x, p.y, cw, ch); ctx.fill(); ctx.stroke()
+    // Draw GT boxes (batched)
+    if (showGT && gtBoxes.length) {
+      drawBoxes(ctx, gtBoxes, true, layout.s, offset);
+    }
 
-        drawIdLabel(ctx, String(rb.id), p.x, Math.max(12, p.y - 4), 'rgba(255, 140, 0, 0.95)');
-
-        ctx.fillStyle = COLORS.predStroke
-        const handles = [
-          {x:p.x, y:p.y},
-          {x:p.x+cw, y:p.y},
-          {x:p.x, y:p.y+ch},
-          {x:p.x+cw, y:p.y+ch},
-        ]
-        for (const h of handles){
-          ctx.beginPath()
-          ctx.rect(h.x - HANDLE_SIZE/2, h.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE)
-          ctx.fill()
+    // Draw Pred boxes (batched)
+    if (showPred && predBoxes.length) {
+      // Adjust predBoxes for active/ghost state
+      const adjustedPredBoxes = predBoxes.map(b => {
+        if (activeId === b.id && ghostBox) {
+          return ghostBox;
         }
-      }
+        return b;
+      });
+      
+      drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
+      drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
     }
-  }, [img, layout.W, layout.H, layout.ox, layout.oy, layout.s, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox])
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles])
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();

@@ -14,13 +14,15 @@ export default function BottomHud() {
   }))
 
   const [fps, setFps] = useState(30)
-  const [frameInput, setFrameInput] = useState('')
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState('')
   const playIntervalRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number>(0)
 
   const total = frames.length
   const canPrev = cur > 0
   const canNext = cur < total - 1
+  const currentFrameNum = frames[cur]?.i ?? cur+1
 
   const goPrev = useCallback(() => {
     if (!canPrev) return
@@ -34,18 +36,32 @@ export default function BottomHud() {
     prefetchAround(cur + 1, 3)
   }, [canNext, cur, setCur, prefetchAround])
 
-  const jumpToFrame = useCallback(() => {
-    const frameNum = parseInt(frameInput)
-    if (isNaN(frameNum)) return
+  const startEdit = useCallback(() => {
+    if (isPlaying) return
+    setIsEditing(true)
+    setEditValue(String(currentFrameNum))
+  }, [isPlaying, currentFrameNum])
+
+  const cancelEdit = useCallback(() => {
+    setIsEditing(false)
+    setEditValue('')
+  }, [])
+
+  const applyEdit = useCallback(() => {
+    const frameNum = parseInt(editValue)
+    if (isNaN(frameNum)) {
+      cancelEdit()
+      return
+    }
     
     // Find frame index by frame number
     const targetIndex = frames.findIndex(f => f.i === frameNum)
     if (targetIndex >= 0) {
       setCur(targetIndex)
       prefetchAround(targetIndex, 3)
-      setFrameInput('')
     }
-  }, [frameInput, frames, setCur, prefetchAround])
+    cancelEdit()
+  }, [editValue, frames, setCur, prefetchAround, cancelEdit])
 
   const togglePlay = useCallback(() => {
     setPlaying(!isPlaying)
@@ -120,27 +136,33 @@ export default function BottomHud() {
         <ChevronLeft size={18}/>
       </button>
 
-      {/* Frame info and input */}
-      <div className="flex items-center gap-2">
-        <div className="text-sm font-mono">
-          Frame <span className="font-semibold">{frames[cur]?.i ?? cur+1}</span>
-          {' / '}
-          <span>{frames[total - 1]?.i ?? total}</span>
-        </div>
-
-        {/* Jump to frame input - Enter only */}
-        <input
-          type="text"
-          value={frameInput}
-          onChange={(e) => setFrameInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') jumpToFrame()
-            if (e.key === 'Escape') setFrameInput('')
-          }}
-          placeholder="프레임 번호"
-          className="w-20 text-sm border rounded px-1.5 py-0.5 text-center"
-          disabled={isPlaying}
-        />
+      {/* Frame display/input (merged) */}
+      <div className="text-sm font-mono flex items-center gap-1">
+        <span className="text-gray-600">Frame</span>
+        {isEditing ? (
+          <input
+            type="text"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') applyEdit()
+              if (e.key === 'Escape') cancelEdit()
+            }}
+            onBlur={applyEdit}
+            autoFocus
+            className="w-16 font-semibold border border-blue-500 rounded px-1 py-0.5 text-center"
+          />
+        ) : (
+          <span
+            onClick={startEdit}
+            className="font-semibold cursor-text hover:bg-gray-100 rounded px-1 py-0.5"
+            title="클릭하여 이동"
+          >
+            {currentFrameNum}
+          </span>
+        )}
+        <span className="text-gray-600">/</span>
+        <span>{frames[total - 1]?.i ?? total}</span>
       </div>
 
       {/* Divider */}
