@@ -72,7 +72,7 @@ export default function OverlayCanvas(){
   const rootRef = useRef<HTMLDivElement>(null)
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
-  const fm = frames[cur] || null;
+  const fm = useMemo(() => frames[cur] || null, [frames, cur]);
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
   const [predBase, setPredBase] = useState<FlatBox[]>([]);
@@ -117,7 +117,7 @@ export default function OverlayCanvas(){
       } else setGtBoxes([]);
     })();
     return ()=>{aborted = true;}
-  }, [gtId, fm?.i, cur]);
+  }, [gtId, fm]);
 
   useEffect(()=>{
     let aborted = false;
@@ -128,7 +128,7 @@ export default function OverlayCanvas(){
       } else setPredBase([]);
     })();
     return ()=>{aborted = true;}
-  }, [predId, fm?.i, cur]);
+  }, [predId, fm]);
 
   useEffect(()=>{
     setActiveId(null);
