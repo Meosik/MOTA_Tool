@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useDeferredValue } from 'react'
 import { useMapMetrics } from '../../hooks/mapApi'
 import { useMapStore } from '../../store/mapStore'
 
@@ -81,8 +81,15 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const setIou = useMapStore(s => s.setIou);
   const setConf = useMapStore(s => s.setConf);
   
-  // Get current image and annotations from store
-  const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
+  // Defer expensive calculations to avoid blocking slider interactions
+  const deferredIou = useDeferredValue(iou);
+  const deferredConf = useDeferredValue(conf);
+  
+  // Get current image and annotations from store with stable selectors
+  const currentImageIndex = useMapStore(s => s.currentImageIndex);
+  const images = useMapStore(s => s.images);
+  const gtAnnotations = useMapStore(s => s.gtAnnotations);
+  const predAnnotations = useMapStore(s => s.predAnnotations);
   const currentImage = images[currentImageIndex] || null;
   
   // Use gtId/predId if provided, fallback to projectId/annotationId
@@ -92,12 +99,12 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   // Manual trigger for overall mAP calculation
   const [shouldCalculateOverall, setShouldCalculateOverall] = useState(false);
   
-  // Call backend API only when manually triggered
+  // Call backend API only when manually triggered (use deferred values to reduce API calls)
   const { data, isLoading, error, refetch } = useMapMetrics(
     effectiveGtId, 
     effectivePredId!, 
-    conf, 
-    iou,
+    deferredConf, 
+    deferredIou,
     shouldCalculateOverall
   );
   
@@ -107,42 +114,47 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     refetch();
   };
   
-  // Calculate per-image statistics
-  const imageStats = React.useMemo(() => {
-    if (!currentImage) return null;
-    
-    console.log('MapControlPanel: Calculating stats for image', currentImage.id);
-    console.log('MapControlPanel: Total GT', gtAnnotations.length, 'Total Pred', predAnnotations.length);
-    
-    // Filter GT for current image
-    const gtForImage = gtAnnotations.filter(a => {
+  // Memoize GT filtering separately (only depends on currentImage and gtAnnotations)
+  const gtForImage = React.useMemo(() => {
+    if (!currentImage) return [];
+    return gtAnnotations.filter(a => {
       // If no image_id, show for all images
       if (!a.image_id) return true;
       // Otherwise match current image
       return a.image_id === currentImage.id;
     });
+  }, [currentImage, gtAnnotations]);
+
+  // Memoize pred filtering (uses deferred values to avoid blocking slider)
+  const predForImage = React.useMemo(() => {
+    if (!currentImage) return [];
     
-    // Filter pred annotations by image, confidence, and IoU
-    const predForImage = predAnnotations.filter(a => {
+    return predAnnotations.filter(a => {
       // Check image_id
       if (a.image_id && a.image_id !== currentImage.id) return false;
       
       // Check confidence threshold
-      if ((a.conf || 0) < conf) return false;
+      if ((a.conf || 0) < deferredConf) return false;
       
       // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
-      if (iou > 0 && gtForImage.length > 0) {
+      if (deferredIou > 0 && gtForImage.length > 0) {
         const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(a.bbox, gt.bbox)));
-        if (maxIoU < iou) return false;
+        if (maxIoU < deferredIou) return false;
       }
       
       return true;
     });
+  }, [currentImage, predAnnotations, deferredConf, deferredIou, gtForImage]);
+
+  // Calculate per-image statistics (uses deferred values)
+  const imageStats = React.useMemo(() => {
+    if (!currentImage) return null;
     
+    console.log('MapControlPanel: Calculating stats for image', currentImage.id);
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
     // Calculate AP for current image
-    const imageAP = calculateImageAP(gtForImage, predForImage, iou);
+    const imageAP = calculateImageAP(gtForImage, predForImage, deferredIou);
     
     return {
       gtCount: gtForImage.length,
@@ -151,7 +163,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       imageId: currentImage.id,
       mAP: imageAP,
     };
-  }, [currentImage, gtAnnotations, predAnnotations, conf, iou]);
+  }, [currentImage, gtForImage, predForImage, deferredIou]);
 
   // Slider adjustment utilities (matching MOTA RightPanel)
   const stepSmall = 0.01
