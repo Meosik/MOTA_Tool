@@ -261,13 +261,23 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const effectiveGtId = gtId || projectId
   const effectivePredId = predId || annotationId
   
-  // Call backend API to calculate mAP automatically (always enabled)
-  const { data, isLoading, error } = useMapMetrics(
+  // Manual trigger for overall mAP calculation
+  const [shouldCalculateOverall, setShouldCalculateOverall] = useState(false);
+  
+  // Call backend API only when manually triggered
+  const { data, isLoading, error, refetch } = useMapMetrics(
     effectiveGtId, 
     effectivePredId!, 
     conf, 
-    iou
+    iou,
+    shouldCalculateOverall
   );
+  
+  // Handle calculate overall mAP button click
+  const handleCalculateOverallMap = () => {
+    setShouldCalculateOverall(true);
+    refetch();
+  };
   
   // Calculate per-image statistics
   const imageStats = React.useMemo(() => {
@@ -284,7 +294,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       return a.image_id === currentImage.id;
     });
     
-    // Filter pred annotations by image, confidence, and IoU
+    // Filter pred annotations by image and confidence only (NOT IoU for current image display)
     const predForImage = predAnnotations.filter(a => {
       // Check image_id
       if (a.image_id && a.image_id !== currentImage.id) return false;
@@ -292,18 +302,12 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       // Check confidence threshold
       if ((a.conf || 0) < conf) return false;
       
-      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
-      if (iou > 0 && gtForImage.length > 0) {
-        const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(a.bbox, gt.bbox)));
-        if (maxIoU < iou) return false;
-      }
-      
       return true;
     });
     
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
-    // Calculate AP for current image
+    // Calculate AP for current image (IoU threshold applied in AP calculation, not filtering)
     const imageAP = calculateImageAP(gtForImage, predForImage, iou);
     
     return {
@@ -402,8 +406,17 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       )}
 
       {/* Overall Dataset Metrics */}
-      <div className="space-y-1">
-        <div className="text-sm font-semibold">Overall Dataset</div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold">Overall Dataset</div>
+          <button
+            onClick={handleCalculateOverallMap}
+            disabled={!effectiveGtId || !effectivePredId || isLoading}
+            className="px-3 py-1 text-xs rounded bg-brand-600 text-white hover:bg-brand-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Calculating...' : 'Calculate Overall mAP'}
+          </button>
+        </div>
         
         {error && (
           <div className="text-xs text-red-500">Error loading metrics</div>
@@ -439,7 +452,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             )}
           </>
         ) : (
-          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하면 전체 데이터셋 mAP가 계산됩니다.</div>
+          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하고 버튼을 눌러 전체 데이터셋 mAP를 계산하세요.</div>
         )}
       </div>
     </aside>
