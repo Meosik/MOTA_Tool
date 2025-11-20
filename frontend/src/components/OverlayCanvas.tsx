@@ -483,7 +483,7 @@ export default function OverlayCanvas(){
   }, [dragMode]);
 
   return (
-    <div ref={rootRef} className="relative w-full h-full bg-gray-300 select-none">
+    <div ref={rootRef} className="relative w-full h-full bg-white select-none">
       <canvas
         ref={cnvRef}
         className="w-full h-full block"
