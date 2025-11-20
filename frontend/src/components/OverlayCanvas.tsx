@@ -1,5 +1,5 @@
 // frontend/src/components/OverlayCanvas.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useFrameStore from '../store/frameStore';
 import type { Box } from '../types/annotation';
 import { iouRect } from '../utils/matching';
