@@ -137,6 +137,7 @@ export default function InteractiveCanvas({
     });
 
     // Filter pred annotations by confidence and visibility only (NOT IoU for current image display)
+    // Design: IoU threshold is only applied during export and overall mAP calculation for better performance
     const filteredPred = predToRender.filter(ann => {
       // Check visibility from control panel
       if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
@@ -147,7 +148,7 @@ export default function InteractiveCanvas({
       // Check visible categories
       if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
       
-      // IoU threshold is NOT applied to canvas display, only to export and overall mAP calculation
+      // Note: IoU threshold is NOT applied to canvas display, only to export and overall mAP calculation
       
       return true;
     });

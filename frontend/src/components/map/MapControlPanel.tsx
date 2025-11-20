@@ -295,6 +295,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     });
     
     // Filter pred annotations by image and confidence only (NOT IoU for current image display)
+    // Design: IoU threshold is only applied during export and overall mAP calculation for better performance
     const predForImage = predAnnotations.filter(a => {
       // Check image_id
       if (a.image_id && a.image_id !== currentImage.id) return false;
@@ -307,7 +308,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     
     console.log('MapControlPanel: Filtered GT', gtForImage.length, 'Filtered Pred', predForImage.length);
     
-    // Calculate AP for current image (IoU threshold applied in AP calculation, not filtering)
+    // Calculate AP for current image (IoU threshold applied in AP calculation for matching, not for filtering)
     const imageAP = calculateImageAP(gtForImage, predForImage, iou);
     
     return {
