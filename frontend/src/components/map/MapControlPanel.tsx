@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { useMapMetrics } from '../../hooks/mapApi'
 import { useMapStore } from '../../store/mapStore'
-import { getCategoryNameById } from '../../constants/cocoCategories'
 
 // Calculate IoU (Intersection over Union) between two bounding boxes
 function calculateIoU(box1: [number, number, number, number], box2: [number, number, number, number]): number {
@@ -73,178 +72,7 @@ interface MapControlPanelProps {
   predId?: string | null;
 }
 
-// Instance Visibility Panel Component
-function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations }: {
-  currentImage: any;
-  gtAnnotations: any[];
-  predAnnotations: any[];
-}) {
-  const visibleInstances = useMapStore(s => s.visibleInstances) || new Set<string>();
-  const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
-  
-  // Initialize all instances as visible
-  React.useEffect(() => {
-    const allIds = new Set<string>();
-    gtAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`gt-${a.id}`);
-    });
-    predAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`pred-${a.id}`);
-    });
-    setVisibleInstances(allIds);
-  }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
-  
-  // Group annotations by type and category
-  const groupedAnns = React.useMemo(() => {
-    const gtForImage = gtAnnotations.filter(a => a.image_id === currentImage.id);
-    const predForImage = predAnnotations.filter(a => a.image_id === currentImage.id);
-    
-    const gtByCategory = new Map<number, any[]>();
-    gtForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!gtByCategory.has(cat)) gtByCategory.set(cat, []);
-      gtByCategory.get(cat)!.push(ann);
-    });
-    
-    const predByCategory = new Map<number, any[]>();
-    predForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!predByCategory.has(cat)) predByCategory.set(cat, []);
-      predByCategory.get(cat)!.push(ann);
-    });
-    
-    return { gtByCategory, predByCategory };
-  }, [currentImage.id, gtAnnotations, predAnnotations]);
-  
-  const toggleGroup = (groupId: string) => {
-    setExpandedGroups(prev => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  };
-  
-  const toggleInstance = (id: string) => {
-    setVisibleInstances((prev: Set<string>) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-  
-  const toggleAllInGroup = (type: 'gt' | 'pred', category?: number) => {
-    const instances: string[] = [];
-    const anns = type === 'gt' ? gtAnnotations : predAnnotations;
-    anns.filter(a => a.image_id === currentImage.id && (category === undefined || a.category === category))
-      .forEach(a => instances.push(`${type}-${a.id}`));
-    
-    const allVisible = instances.every(id => visibleInstances.has(id));
-    setVisibleInstances((prev: Set<string>) => {
-      const next = new Set(prev);
-      instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
-      return next;
-    });
-  };
-  
-  return (
-    <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50 max-h-96 overflow-y-auto">
-      <div className="text-sm font-semibold mb-2">Instance Visibility</div>
-      
-      {/* GT Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('gt')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('gt') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
-            onChange={() => toggleAllInGroup('gt')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-green-700">GT ({Array.from(groupedAnns.gtByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('gt') && Array.from(groupedAnns.gtByCategory.entries()).map(([cat, anns]) => (
-          <div key={`gt-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`gt-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`gt-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
-                onChange={() => toggleAllInGroup('gt', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`gt-cat-${cat}`) && anns.map(ann => (
-              <div key={`gt-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`gt-${ann.id}`)}
-                  onChange={() => toggleInstance(`gt-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      
-      {/* Pred Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('pred')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('pred') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
-            onChange={() => toggleAllInGroup('pred')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-orange-600">Pred ({Array.from(groupedAnns.predByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('pred') && Array.from(groupedAnns.predByCategory.entries()).map(([cat, anns]) => (
-          <div key={`pred-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`pred-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`pred-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
-                onChange={() => toggleAllInGroup('pred', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`pred-cat-${cat}`) && anns.map(ann => (
-              <div key={`pred-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`pred-${ann.id}`)}
-                  onChange={() => toggleInstance(`pred-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id} (conf: {(ann.conf || 0).toFixed(2)})</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+
 
 export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
   // Read thresholds from store (like MOTA mode's RightPanel)
@@ -392,15 +220,6 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         </div>
         <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
       </div>
-
-      {/* Instance Visibility Controls */}
-      {currentImage && (
-        <InstanceVisibilityPanel 
-          currentImage={currentImage} 
-          gtAnnotations={gtAnnotations} 
-          predAnnotations={predAnnotations}
-        />
-      )}
 
       {/* Current Image mAP */}
       {imageStats && (
