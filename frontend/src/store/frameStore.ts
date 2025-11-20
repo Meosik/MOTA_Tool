@@ -148,44 +148,14 @@ function getAdaptiveRadius(): number {
 
 // ---- Prefetch 스케줄링 (과도한 폭주 방지)
 let prefetchTimer: number | null = null;
-let lastPrefetchCenter = -1;
-
-function schedulePrefetch(center:number, radius:number, prioritizeForward = false){
+function schedulePrefetch(center:number, radius:number){
   if (prefetchTimer!=null) { cancelAnimationFrame(prefetchTimer); prefetchTimer = null; }
   prefetchTimer = requestAnimationFrame(()=>{
     const st = useFrameStore.getState();
     const N = st.frames.length;
-    
-    if (prioritizeForward) {
-      // 재생 중: 앞쪽 프레임 우선 프리페치 (디코딩 시간 확보)
-      // forward: center+1 ~ center+radius*2
-      // backward: center-1 ~ center-radius
-      const forwardLo = Math.min(N-1, center + 1);
-      const forwardHi = Math.min(N-1, center + radius * 2);
-      const backwardLo = Math.max(0, center - radius);
-      const backwardHi = Math.max(0, center - 1);
-      
-      // 앞쪽 먼저 prefetch (더 중요)
-      for (let i = forwardLo; i <= forwardHi; i++) {
-        ensureObjectURLFor(i);
-        // 즉시 디코딩 시작 (Image decode 병렬화)
-        const frame = st.frames[i];
-        if (frame.url) st.getImage(frame.url).catch(()=>{});
-      }
-      // 뒤쪽 prefetch
-      for (let i = backwardHi; i >= backwardLo; i--) {
-        ensureObjectURLFor(i);
-      }
-    } else {
-      // 일반 모드: 양방향 균등 prefetch
-      const lo = Math.max(0, center - radius);
-      const hi = Math.min(N-1, center + radius);
-      for (let i=lo; i<=hi; i++) {
-        ensureObjectURLFor(i);
-      }
-    }
-    
-    lastPrefetchCenter = center;
+    const lo = Math.max(0, center - radius);
+    const hi = Math.min(N-1, center + radius);
+    for (let i=lo; i<=hi; i++) ensureObjectURLFor(i);
   });
 }
 
@@ -369,11 +339,10 @@ const useFrameStore = create<State>((set, get) => ({
     return p;
   },
 
-  prefetchAround: (center, radius?, prioritizeForward?)=>{
+  prefetchAround: (center, radius?)=>{
     // Phase 2: radius가 지정되지 않으면 적응형 사용
     const adaptiveRadius = radius ?? getAdaptiveRadius();
-    const isPlaying = get().isPlaying;
-    schedulePrefetch(center, adaptiveRadius, prioritizeForward ?? isPlaying);
+    schedulePrefetch(center, adaptiveRadius);
   },
 
   fillCacheWindow: async(kind, f0, f1)=>{

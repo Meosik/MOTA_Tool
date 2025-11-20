@@ -100,8 +100,7 @@ export default function BottomHud() {
         }
 
         state.setCur(nextIndex)
-        // Aggressive forward prefetch during playback (up to 8 frames ahead)
-        state.prefetchAround(nextIndex, 8, true)
+        state.prefetchAround(nextIndex, 5) // Larger prefetch during playback
         lastFrameTimeRef.current = currentTime - (elapsed % frameDelay)
       }
 
