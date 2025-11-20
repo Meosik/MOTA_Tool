@@ -91,16 +91,26 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
-  // Initialize all instances as visible
+  // Initialize new instances as visible (don't reset existing visibility)
   React.useEffect(() => {
-    const allIds = new Set<string>();
+    const currentIds = new Set<string>();
     gtAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`gt-${a.id}`);
+      currentIds.add(`gt-${a.id}`);
     });
     predAnnotations.filter(a => a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`pred-${a.id}`);
+      currentIds.add(`pred-${a.id}`);
     });
-    setVisibleInstances(allIds);
+    
+    // Only add instances that aren't already in visibleInstances
+    setVisibleInstances((prev: Set<string>) => {
+      const next = new Set(prev);
+      currentIds.forEach(id => {
+        if (!next.has(id)) {
+          next.add(id); // Add new instances as visible by default
+        }
+      });
+      return next;
+    });
   }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
   
   // Group annotations by type and category
@@ -169,7 +179,10 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
           </button>
           <input 
             type="checkbox" 
-            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
+            checked={(() => {
+              const gtAnns = Array.from(groupedAnns.gtByCategory.values()).flat();
+              return gtAnns.length > 0 && gtAnns.every(a => visibleInstances.has(`gt-${a.id}`));
+            })()}
             onChange={() => toggleAllInGroup('gt')}
             className="w-3 h-3"
           />
@@ -184,7 +197,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
               </button>
               <input 
                 type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
+                checked={anns.length > 0 && anns.every(a => visibleInstances.has(`gt-${a.id}`))}
                 onChange={() => toggleAllInGroup('gt', cat)}
                 className="w-3 h-3"
               />
@@ -214,7 +227,10 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
           </button>
           <input 
             type="checkbox" 
-            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
+            checked={(() => {
+              const predAnns = Array.from(groupedAnns.predByCategory.values()).flat();
+              return predAnns.length > 0 && predAnns.every(a => visibleInstances.has(`pred-${a.id}`));
+            })()}
             onChange={() => toggleAllInGroup('pred')}
             className="w-3 h-3"
           />
@@ -229,7 +245,7 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
               </button>
               <input 
                 type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
+                checked={anns.length > 0 && anns.every(a => visibleInstances.has(`pred-${a.id}`))}
                 onChange={() => toggleAllInGroup('pred', cat)}
                 className="w-3 h-3"
               />
@@ -260,6 +276,38 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const conf = useMapStore(s => s.conf);
   const setIou = useMapStore(s => s.setIou);
   const setConf = useMapStore(s => s.setConf);
+  
+  // Local state for slider values with throttled updates to store
+  const [localIou, setLocalIou] = useState(iou);
+  const [localConf, setLocalConf] = useState(conf);
+  
+  // Sync local state with store when store changes externally
+  React.useEffect(() => {
+    setLocalIou(iou);
+  }, [iou]);
+  
+  React.useEffect(() => {
+    setLocalConf(conf);
+  }, [conf]);
+  
+  // Throttle store updates (update store 100ms after user stops adjusting)
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localIou !== iou) {
+        setIou(localIou);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [localIou, iou, setIou]);
+  
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localConf !== conf) {
+        setConf(localConf);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [localConf, conf, setConf]);
   
   // Get current image and annotations from store
   const { currentImageIndex, images, gtAnnotations, predAnnotations } = useMapStore();
@@ -338,8 +386,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
   const stepLarge = 0.05
   const round2 = (v: number) => Math.round(v * 100) / 100
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
-  const adjustIou = (d: number) => setIou(clamp01(round2(iou + d)))
-  const adjustConf = (d: number) => setConf(clamp01(round2(conf + d)))
+  const adjustIou = (d: number) => setLocalIou(clamp01(round2(localIou + d)))
+  const adjustConf = (d: number) => setLocalConf(clamp01(round2(localConf + d)))
 
   return (
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
@@ -358,8 +406,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             min={0}
             max={1}
             step={0.01}
-            value={iou}
-            onChange={e => setIou(clamp01(parseFloat(e.currentTarget.value)))}
+            value={localIou}
+            onChange={e => setLocalIou(clamp01(parseFloat(e.currentTarget.value)))}
             className="flex-1"
           />
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(+stepSmall)} title="IoU +0.01">
@@ -369,7 +417,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">IoU = {iou.toFixed(2)}</div>
+        <div className="text-xs text-neutral-600 font-mono">IoU = {localIou.toFixed(2)}</div>
       </div>
 
       {/* Confidence Threshold */}
@@ -387,8 +435,8 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             min={0}
             max={1}
             step={0.01}
-            value={conf}
-            onChange={e => setConf(clamp01(parseFloat(e.currentTarget.value)))}
+            value={localConf}
+            onChange={e => setLocalConf(clamp01(parseFloat(e.currentTarget.value)))}
             className="flex-1"
           />
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(+stepSmall)} title="conf +0.01">
@@ -398,7 +446,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
+        <div className="text-xs text-neutral-600 font-mono">conf ≥ {localConf.toFixed(2)}</div>
       </div>
 
       {/* Instance Visibility Controls */}

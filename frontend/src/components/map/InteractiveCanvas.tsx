@@ -463,27 +463,7 @@ export default function InteractiveCanvas({
     });
   };
 
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newScale = Math.max(0.1, Math.min(5, scale * zoomFactor));
-    
-    // Zoom towards mouse position
-    const imgX = (mouseX - offset.x) / scale;
-    const imgY = (mouseY - offset.y) / scale;
-    
-    setScale(newScale);
-    setOffset({
-      x: mouseX - imgX * newScale,
-      y: mouseY - imgY * newScale
-    });
-  };
+
 
   if (!imageUrl) {
     return (
@@ -492,6 +472,37 @@ export default function InteractiveCanvas({
       </div>
     );
   }
+
+  // Add wheel event listener with passive: false to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const wheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      if (!rect) return;
+      
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const newScale = Math.max(0.1, Math.min(5, scale * zoomFactor));
+      
+      // Zoom towards mouse position
+      const imgX = (mouseX - offset.x) / scale;
+      const imgY = (mouseY - offset.y) / scale;
+      
+      setScale(newScale);
+      setOffset({
+        x: mouseX - imgX * newScale,
+        y: mouseY - imgY * newScale
+      });
+    };
+    
+    canvas.addEventListener('wheel', wheelHandler, { passive: false });
+    return () => canvas.removeEventListener('wheel', wheelHandler);
+  }, [scale, offset]);
 
   return (
     <div ref={containerRef} className="flex-1 relative bg-gray-100">
@@ -502,7 +513,6 @@ export default function InteractiveCanvas({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />
       <div className="absolute bottom-4 right-4 bg-white px-3 py-2 rounded shadow text-sm">
