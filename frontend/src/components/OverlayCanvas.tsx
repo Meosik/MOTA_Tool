@@ -83,6 +83,9 @@ export default function OverlayCanvas(){
   const [ghostBox, setGhostBox] = useState<Box|null>(null);
 
   const [idEdit, setIdEdit] = useState<{show:boolean; frame:number; targetId:number; value:string; left:number; top:number; geom: Omit<Box,'id'>}>({ show:false, frame:0, targetId:0, value:'', left:0, top:0, geom:{x:0,y:0,w:0,h:0} })
+  
+  const drawPendingRef = useRef(false);
+  const rafIdRef = useRef<number | null>(null);
 
   const layout = useMemo(()=>{
     const W = cnvRef.current?.clientWidth || 1280;
@@ -264,8 +267,8 @@ export default function OverlayCanvas(){
     }
   }, []);
 
-  // draw - optimized with batching
-  useEffect(() => {
+  // draw - optimized with batching and RAF throttling
+  const performDraw = useCallback(() => {
     const cnv = cnvRef.current;
     if (!cnv) return;
     const ctx = cnv.getContext('2d', { alpha: false }); // Disable alpha for better performance
@@ -311,7 +314,29 @@ export default function OverlayCanvas(){
       drawBoxes(ctx, adjustedPredBoxes, false, layout.s, offset);
       drawPredHandles(ctx, predBoxes, activeId, ghostBox, layout.s, offset);
     }
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles])
+    
+    drawPendingRef.current = false;
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles]);
+
+  useEffect(() => {
+    // Cancel any pending draw
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+    }
+    
+    // Schedule draw on next frame if not already pending
+    if (!drawPendingRef.current) {
+      drawPendingRef.current = true;
+      rafIdRef.current = requestAnimationFrame(performDraw);
+    }
+    
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, [performDraw])
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
@@ -458,7 +483,7 @@ export default function OverlayCanvas(){
   }, [dragMode]);
 
   return (
-    <div ref={rootRef} className="relative w-full h-full bg-black/2 select-none">
+    <div ref={rootRef} className="relative w-full h-full bg-gray-300 select-none">
       <canvas
         ref={cnvRef}
         className="w-full h-full block"
