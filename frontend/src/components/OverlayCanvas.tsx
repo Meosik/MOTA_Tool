@@ -117,7 +117,7 @@ export default function OverlayCanvas(){
       } else setGtBoxes([]);
     })();
     return ()=>{aborted = true;}
-  }, [gtId, fm?.i]);
+  }, [gtId, fm?.i, cur]);
 
   useEffect(()=>{
     let aborted = false;
@@ -128,7 +128,7 @@ export default function OverlayCanvas(){
       } else setPredBase([]);
     })();
     return ()=>{aborted = true;}
-  }, [predId, fm?.i]);
+  }, [predId, fm?.i, cur]);
 
   useEffect(()=>{
     setActiveId(null);
@@ -287,7 +287,7 @@ export default function OverlayCanvas(){
     if (img) {
       ctx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
     } else {
-      ctx.fillStyle = '#f7f7f7';
+      ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, cssW, cssH);
     }
 
