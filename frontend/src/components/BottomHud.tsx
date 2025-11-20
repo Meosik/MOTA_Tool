@@ -120,24 +120,28 @@ export default function BottomHud() {
         <ChevronLeft size={18}/>
       </button>
 
-      {/* Play/Pause button */}
-      <button
-        className="p-1.5 rounded-full border hover:bg-gray-50 bg-blue-50 hover:bg-blue-100"
-        onClick={togglePlay}
-        title={isPlaying ? '일시정지' : '재생'}
-      >
-        {isPlaying ? <Pause size={18}/> : <Play size={18}/>}
-      </button>
+      {/* Frame info and input */}
+      <div className="flex items-center gap-2">
+        <div className="text-sm font-mono">
+          Frame <span className="font-semibold">{frames[cur]?.i ?? cur+1}</span>
+          {' / '}
+          <span>{frames[total - 1]?.i ?? total}</span>
+        </div>
 
-      {/* Next button */}
-      <button
-        className="p-1.5 rounded-full border hover:bg-gray-50 disabled:opacity-40"
-        onClick={goNext}
-        disabled={!canNext || isPlaying}
-        title="다음 프레임"
-      >
-        <ChevronRight size={18}/>
-      </button>
+        {/* Jump to frame input - Enter only */}
+        <input
+          type="text"
+          value={frameInput}
+          onChange={(e) => setFrameInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') jumpToFrame()
+            if (e.key === 'Escape') setFrameInput('')
+          }}
+          placeholder="프레임 번호"
+          className="w-20 text-sm border rounded px-1.5 py-0.5 text-center"
+          disabled={isPlaying}
+        />
+      </div>
 
       {/* Divider */}
       <div className="h-6 w-px bg-gray-300"/>
@@ -159,41 +163,24 @@ export default function BottomHud() {
         </select>
       </div>
 
-      {/* Divider */}
-      <div className="h-6 w-px bg-gray-300"/>
+      {/* Play/Pause button */}
+      <button
+        className="p-1.5 rounded-full border hover:bg-gray-50 bg-blue-50 hover:bg-blue-100"
+        onClick={togglePlay}
+        title={isPlaying ? '일시정지' : '재생'}
+      >
+        {isPlaying ? <Pause size={18}/> : <Play size={18}/>}
+      </button>
 
-      {/* Frame info and input */}
-      <div className="flex items-center gap-2">
-        <div className="text-sm font-mono">
-          Frame <span className="font-semibold">{frames[cur]?.i ?? cur+1}</span>
-          {' / '}
-          <span>{frames[total - 1]?.i ?? total}</span>
-        </div>
-
-        {/* Jump to frame input */}
-        <div className="flex items-center gap-1">
-          <input
-            type="text"
-            value={frameInput}
-            onChange={(e) => setFrameInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') jumpToFrame()
-              if (e.key === 'Escape') setFrameInput('')
-            }}
-            placeholder="이동"
-            className="w-16 text-sm border rounded px-1.5 py-0.5 text-center"
-            disabled={isPlaying}
-          />
-          <button
-            onClick={jumpToFrame}
-            disabled={!frameInput || isPlaying}
-            className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50 disabled:opacity-40"
-            title="프레임 이동"
-          >
-            GO
-          </button>
-        </div>
-      </div>
+      {/* Next button */}
+      <button
+        className="p-1.5 rounded-full border hover:bg-gray-50 disabled:opacity-40"
+        onClick={goNext}
+        disabled={!canNext || isPlaying}
+        title="다음 프레임"
+      >
+        <ChevronRight size={18}/>
+      </button>
     </div>
   )
 }
