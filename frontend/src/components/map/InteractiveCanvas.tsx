@@ -104,10 +104,13 @@ export default function InteractiveCanvas({
 
   // Memoize filtered annotations to avoid recalculating IoU on every render
   const filteredAnnotations = useMemo(() => {
+    console.log('[Canvas Filter] visibleInstances size:', visibleInstances.size, 
+                '- GT total:', gtAnnotations.length, '- Pred total:', predAnnotations.length);
+    
     // If dragging, replace the annotation being dragged with the updated version from dragState
     let predToRender = predAnnotations;
     if (dragState.active && dragState.annotation && dragState.annotationIndex >= 0) {
-      predToRender = predAnnotations.map((ann, idx) => 
+      predToRender = predAnnotations.map((ann, idx) =>
         idx === dragState.annotationIndex ? dragState.annotation! : ann
       );
     }
@@ -145,6 +148,7 @@ export default function InteractiveCanvas({
       return true;
     });
 
+    console.log('[Canvas Filter] Result - GT visible:', filteredGt.length, '- Pred visible:', filteredPred.length);
     return { filteredGt, filteredPred };
   }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, dragState]);
 

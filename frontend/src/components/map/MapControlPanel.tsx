@@ -101,14 +101,21 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       currentIds.add(`pred-${a.id}`);
     });
     
+    console.log('[Visibility Init] Current image:', currentImage.id);
+    console.log('[Visibility Init] Found instances:', currentIds.size, Array.from(currentIds).slice(0, 5));
+    
     // Only add instances that aren't already in visibleInstances
     setVisibleInstances((prev: Set<string>) => {
+      console.log('[Visibility Init] Previous visible count:', prev.size);
       const next = new Set(prev);
+      let addedCount = 0;
       currentIds.forEach(id => {
         if (!next.has(id)) {
           next.add(id); // Add new instances as visible by default
+          addedCount++;
         }
       });
+      console.log('[Visibility Init] Added:', addedCount, 'Total visible now:', next.size);
       return next;
     });
   }, [currentImage.id, gtAnnotations, predAnnotations, setVisibleInstances]);
@@ -145,10 +152,13 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
   };
   
   const toggleInstance = (id: string) => {
+    console.log('[Visibility Toggle] Instance:', id);
     setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
+      const wasVisible = next.has(id);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      console.log('[Visibility Toggle]', id, wasVisible ? 'hidden' : 'shown', '- Total visible:', next.size);
       return next;
     });
   };
@@ -160,9 +170,13 @@ function InstanceVisibilityPanel({ currentImage, gtAnnotations, predAnnotations 
       .forEach(a => instances.push(`${type}-${a.id}`));
     
     const allVisible = instances.every(id => visibleInstances.has(id));
+    console.log('[Visibility ToggleGroup]', type, category !== undefined ? `cat-${category}` : 'all', 
+                '- instances:', instances.length, '- allVisible:', allVisible);
+    
     setVisibleInstances((prev: Set<string>) => {
       const next = new Set(prev);
       instances.forEach(id => allVisible ? next.delete(id) : next.add(id));
+      console.log('[Visibility ToggleGroup] Action:', allVisible ? 'hide' : 'show', '- Total visible:', next.size);
       return next;
     });
   };
@@ -290,13 +304,13 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
     setLocalConf(conf);
   }, [conf]);
   
-  // Throttle store updates (update store 200ms after user stops adjusting for better performance)
+  // Throttle store updates (update store 300ms after user stops adjusting for better performance)
   React.useEffect(() => {
     const timer = setTimeout(() => {
       if (localIou !== iou) {
         setIou(localIou);
       }
-    }, 200);
+    }, 300);
     return () => clearTimeout(timer);
   }, [localIou, iou, setIou]);
   
@@ -305,7 +319,7 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
       if (localConf !== conf) {
         setConf(localConf);
       }
-    }, 200);
+    }, 300);
     return () => clearTimeout(timer);
   }, [localConf, conf, setConf]);
   
