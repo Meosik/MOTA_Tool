@@ -4,7 +4,7 @@ import useFrameStore from '../store/frameStore'
 import { ChevronLeft, ChevronRight, Play, Pause, Loader2 } from 'lucide-react'
 
 export default function BottomHud() {
-  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying, gtAnnotationId, predAnnotationId, getImage, preloadAllBoxes } = useFrameStore(s => ({
+  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying, gtAnnotationId, predAnnotationId, getImage, preloadAllBoxes, startTrackStream, stopTrackStream } = useFrameStore(s => ({
     frames: s.frames,
     cur: s.cur,
     setCur: s.setCur,
@@ -15,6 +15,8 @@ export default function BottomHud() {
     predAnnotationId: s.predAnnotationId,
     getImage: s.getImage,
     preloadAllBoxes: s.preloadAllBoxes,
+    startTrackStream: s.startTrackStream,
+    stopTrackStream: s.stopTrackStream,
   }))
 
   const [fps, setFps] = useState(30)
@@ -80,9 +82,19 @@ export default function BottomHud() {
       const endIndex = Math.min(frames.length - 1, cur + 60) // Preload next 60 frames (2 seconds at 30fps)
       const totalToPreload = endIndex - startIndex + 1
 
-      // 1) 박스 전체 선로딩 (GT / Pred) - 한 번만 호출
-      //    큰 파일일 경우 초기 지연 발생 가능, 필요시 UI 옵션으로 전환 가능
+      // 기본 정책: 전체 박스 선로딩 + 초기 스트림 시작(향후 2초)
+      // 메모리 검사
+      // @ts-ignore
+      const memInfo = performance.memory;
+      if (memInfo) {
+        const usedPercent = memInfo.usedJSHeapSize / memInfo.jsHeapSizeLimit;
+        if (usedPercent > 0.85) console.warn('메모리 사용량 높음: full preload 진행')
+      }
       await preloadAllBoxes().catch(()=>{})
+      // 스트림 시작 (박스 업데이트나 확장용)
+      const startFrameNum = frames[cur].i;
+      const endFrameNum = frames[Math.min(frames.length - 1, cur + fps*2)]?.i || startFrameNum;
+      startTrackStream({ f0: startFrameNum, f1: endFrameNum });
 
       // Preload images AND boxes
       for (let i = startIndex; i <= endIndex; i++) {
@@ -111,7 +123,7 @@ export default function BottomHud() {
       setIsPreloading(false)
       console.error('Preload error:', error)
     }
-  }, [isPlaying, frames, cur, getImage, setPlaying, preloadAllBoxes])
+  }, [isPlaying, frames, cur, getImage, setPlaying, preloadAllBoxes, fps, startTrackStream])
 
   const togglePlay = useCallback(() => {
     if (isPlaying) {
@@ -262,6 +274,8 @@ export default function BottomHud() {
           <option value="60">60</option>
         </select>
       </div>
+
+      {/* Load selector 제거됨: now always full preload + stream */}
 
       {/* Play/Pause button */}
       <button

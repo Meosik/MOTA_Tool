@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { fetchFrameBoxes, fetchTracksWindow, type FlatBox } from '../lib/api';
 import { fetchAllTracks } from '../lib/api';
+import { openTrackStream, TrackStreamHandle } from '../lib/trackStream';
 import type { Box } from '../types/annotation';
 
 export type Frame = { i:number; url?:string; file?:File };
@@ -43,6 +44,8 @@ type State = {
 
   // 트랙 데이터 변경 버전 (박스 캐시 업데이트 감지용)
   tracksVersion: number;
+  // 전체 트랙이 선로딩 완료되었는지 (완료 시 윈도우 박스 fetch 생략)
+  allTracksLoaded: boolean;
 
   // 액션
   setFrames: (frames: Frame[]) => void;
@@ -67,6 +70,9 @@ type State = {
   getPredBox: (frame:number, id:number, base:Box)=>Box;
   getFrameBoxes: (kind:'gt'|'pred', frame:number)=>FlatBox[];
   preloadAllBoxes: ()=>Promise<void>;
+  startTrackStream: (range:{f0:number; f1:number})=>void;
+  stopTrackStream: ()=>void;
+  _streamHandle?: TrackStreamHandle;
 
   applyOverrideWithHistory:(frame:number, id:number, next:Box)=>void;
   changeOverrideIdWithHistory:(frame:number, oldId:number, newId:number, geom:Omit<Box,'id'>)=>void;
@@ -95,6 +101,36 @@ const urlOwner = new Map<string, number>(); // url -> frameIndex
 // ---- Image Cache LRU (Phase 1: 새로 추가)
 const MAX_DECODED_IMAGES = 200; // ~600MB 최대
 const imgCacheLRU: string[] = [];
+
+// 동시 디코드 제한 (브라우저 리소스 오류 방지)
+const MAX_DECODE_CONCURRENCY = 4;
+let activeDecodes = 0;
+type DecodeJob = { url:string; resolve:(img:HTMLImageElement)=>void; reject:(e:any)=>void };
+const decodeQueue: DecodeJob[] = [];
+
+function processDecodeQueue(){
+  while (activeDecodes < MAX_DECODE_CONCURRENCY && decodeQueue.length){
+    const job = decodeQueue.shift()!;
+    activeDecodes++;
+    const img = new Image();
+    // @ts-ignore
+    img.decoding = 'async';
+    img.onload = () => {
+      activeDecodes--;
+      touchURL(job.url);
+      const cache = useFrameStore.getState().imgCache;
+      touchDecodedImage(job.url, cache);
+      job.resolve(img);
+      processDecodeQueue();
+    };
+    img.onerror = (e) => {
+      activeDecodes--;
+      job.reject(e);
+      processDecodeQueue();
+    };
+    img.src = job.url;
+  }
+}
 
 function touchURL(url:string){
   const i = urlLRU.indexOf(url);
@@ -167,9 +203,11 @@ function schedulePrefetch(center:number, radius:number){
     if (frames.length && frames[lo] && frames[hi]) {
       const f0 = frames[lo].i;
       const f1 = frames[hi].i;
-      // GT / Pred 각각 비동기 윈도우 캐시 채우기 (이미 inFlight 중복 방지 존재)
-      if (st.gtAnnotationId) { st.fillCacheWindow('gt', f0, f1).catch(()=>{}); }
-      if (st.predAnnotationId) { st.fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+      // 전체 트랙 로드 완료 전일 때만 윈도우 박스 채우기
+      if (!st.allTracksLoaded) {
+        if (st.gtAnnotationId) { st.fillCacheWindow('gt', f0, f1).catch(()=>{}); }
+        if (st.predAnnotationId) { st.fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+      }
     }
   });
 }
@@ -201,6 +239,7 @@ const useFrameStore = create<State>((set, get) => ({
   imgCache: new Map(),
 
   tracksVersion: 0,
+  allTracksLoaded: false,
 
   setFrames: (frames)=> set({ frames, cur: 0 }),
 
@@ -211,18 +250,23 @@ const useFrameStore = create<State>((set, get) => ({
     set({ cur: clamped });
     // 현재 + 주변만 URL 보장
     ensureObjectURLFor(clamped);
-    // 이미지와 박스 모두 더 넓은 범위 선로딩 (동적 반경 2~4)
-    const adaptiveRadius = Math.min(4, Math.max(2, getAdaptiveRadius()));
-    schedulePrefetch(clamped, adaptiveRadius);
-    // 추가로 더 먼 박스 프리패칭 (I/O 여유 시) - 이미지 아닌 박스만
+    // 재생 중이면 큰 반경(12), 아니면 적응형 (2~4)
+    const playing = get().isPlaying;
+    const baseRadius = Math.min(4, Math.max(2, getAdaptiveRadius()));
+    const radius = playing ? 12 : baseRadius;
+    schedulePrefetch(clamped, radius);
+    // 추가로 더 먼 박스 프리패칭: 재생 중 미래 프레임 넓게 확보
     const frames = get().frames;
-    const lo2 = Math.max(0, clamped - adaptiveRadius * 2);
-    const hi2 = Math.min(frames.length - 1, clamped + adaptiveRadius * 2);
+    const lo2 = Math.max(0, clamped - (playing ? radius : baseRadius * 2));
+    const hi2 = Math.min(frames.length - 1, clamped + (playing ? radius * 2 : baseRadius * 2));
     if (frames[lo2] && frames[hi2]) {
       const f0 = frames[lo2].i;
       const f1 = frames[hi2].i;
-      if (get().gtAnnotationId) { get().fillCacheWindow('gt', f0, f1).catch(()=>{}); }
-      if (get().predAnnotationId) { get().fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+      // 전체 로드 이전에만 박스 확장 프리패칭 수행
+      if (!get().allTracksLoaded) {
+        if (get().gtAnnotationId) { get().fillCacheWindow('gt', f0, f1).catch(()=>{}); }
+        if (get().predAnnotationId) { get().fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+      }
     }
   },
 
@@ -350,19 +394,10 @@ const useFrameStore = create<State>((set, get) => ({
       touchDecodedImage(url, cache);
       return hit;
     }
+    // 동시 디코드 제한 큐 적용
     const p = new Promise<HTMLImageElement>((resolve,reject)=>{
-      const img = new Image();
-      img.onload = ()=> { 
-        touchURL(url);
-        // Phase 1: 디코드 완료 시 LRU 추가
-        touchDecodedImage(url, cache);
-        resolve(img); 
-      };
-      img.onerror = reject;
-      img.src = url;
-      // modern 브라우저에서 디코드 힌트
-      // @ts-ignore
-      img.decoding = 'async';
+      decodeQueue.push({ url, resolve, reject });
+      processDecodeQueue();
     });
     cache.set(url, p);
     return p;
@@ -415,6 +450,7 @@ const useFrameStore = create<State>((set, get) => ({
     return hit ? hit.slice() : [];
   },
 
+  // 전체 트랙 선로딩: /tracks/full 사용 (대용량일 경우 초기 지연 발생 가능)
   preloadAllBoxes: async ()=>{
     const gtId = get().gtAnnotationId;
     const predId = get().predAnnotationId;
@@ -446,10 +482,63 @@ const useFrameStore = create<State>((set, get) => ({
         const full = await fetchAllTracks(predId);
         ingest(predId, 'pred', full);
       }
-      if (changed>0) set({ tracksVersion: get().tracksVersion + 1 });
+      if (changed>0) set({ tracksVersion: get().tracksVersion + 1, allTracksLoaded: true });
+      else set({ allTracksLoaded: true });
     } catch (e) {
       console.warn('preloadAllBoxes 실패', e);
     }
+  },
+
+  // 재생 전 사용자가 전략 바꾸면 이후 prefetch 로직 분기
+
+  startTrackStream: (range)=>{
+    const gtId = get().gtAnnotationId;
+    const predId = get().predAnnotationId;
+    if (!gtId && !predId) return;
+    // 기존 스트림 종료
+    get().stopTrackStream();
+    const handle = openTrackStream({
+      gtId, predId,
+      f0: range.f0,
+      f1: range.f1,
+      chunk: 60, // 약 2초 분량 (60fps 고려) 청크
+      onChunk: (chunk)=>{
+        let changed = 0;
+        for (const annChunk of chunk.tracks) {
+          const kind = annChunk.kind as 'gt'|'pred';
+          const annId = annChunk.id;
+          const target = kind==='gt' ? gtCache : prCache;
+          for (const tr of annChunk.tracks || []) {
+            for (const fr of tr.frames || []) {
+              const k = `${annId}:${fr.f}`;
+              const list = target.get(k) || [];
+              if (!list.find(v => String(v.id)===String(tr.id))) {
+                const fb: FlatBox = { id: tr.id, bbox: fr.bbox.map(Number) as any, ...(fr.conf!=null?{conf:Number(fr.conf)}:{}) };
+                list.push(fb);
+                target.set(k, list);
+                changed++;
+              }
+            }
+          }
+        }
+        if (changed>0) set({ tracksVersion: get().tracksVersion + 1 });
+      },
+      onDone: () => {
+        // 스트림 종료 후 핸들 제거
+        set({ _streamHandle: undefined });
+      },
+      onError: (e) => {
+        console.warn('Track stream error', e);
+      }
+    });
+    // 비공개 핸들 저장
+    set({ _streamHandle: handle });
+  },
+
+  stopTrackStream: ()=>{
+    const h = (get() as any)._streamHandle as TrackStreamHandle | undefined;
+    if (h) { try { h.close(); } catch {} }
+    set({ _streamHandle: undefined });
   },
 
   applyOverrideWithHistory: (frame, id, next)=>{
