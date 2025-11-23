@@ -93,7 +93,7 @@ export default function OverlayCanvas(){
   const dragAnchor = useRef<{ mode: DragMode; box0: Box; startMouse: Vec; } | null>(null);
   const [ghostBox, setGhostBox] = useState<Box|null>(null);
 
-  const [idEdit, setIdEdit] = useState<{show:boolean; frame:number; targetId:number; value:string; left:number; top:number; geom: Omit<Box,'id'>}>({ show:false, frame:0, targetId:0, value:'', left:0, top:0, geom:{x:0,y:0,w:0,h:0} })
+  const [idEdit, setIdEdit] = useState<{show:boolean; frame:number; targetId:number; baseId:number; value:string; left:number; top:number; geom: Omit<Box,'id'>}>({ show:false, frame:0, targetId:0, baseId:0, value:'', left:0, top:0, geom:{x:0,y:0,w:0,h:0} })
 
   const layout = useMemo(()=>{
     const W = cnvRef.current?.clientWidth || 1280;
@@ -182,13 +182,15 @@ export default function OverlayCanvas(){
     setIdEdit(v=> ({...v, show:false}))
   }, [overrideVer]);
 
-  const predBoxes: Box[] = useMemo(()=>{
+  type EditablePredBox = Box & { _origId:number };
+  const predBoxes: EditablePredBox[] = useMemo(()=>{
     if (!fm) return [];
-    const out: Box[] = [];
+    const out: EditablePredBox[] = [];
     for (const p of predBase) {
       const [x,y,w,h] = p.bbox.map(Number) as [number,number,number,number];
       const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
-      const b = getPredBox(fm.i, Number(base.id), base);
+      const origId = Number(base.id);
+      const b = getPredBox(fm.i, origId, base);
       if ((b.conf ?? 1) < confThr) continue;
       if (iouThr > 0 && gtBoxes.length > 0) {
         let maxI = 0;
@@ -200,7 +202,8 @@ export default function OverlayCanvas(){
         }
         if (maxI < iouThr) continue;
       }
-      out.push(b);
+      // 확정된 box에 원본 id 보존
+      out.push({ ...b, _origId: origId });
     }
     return out;
   }, [predBase, fm?.i, overrideVer, iouThr, confThr, gtBoxes, getPredBox]);
@@ -513,7 +516,8 @@ export default function OverlayCanvas(){
     setIdEdit({
       show: true,
       frame: frame.i,
-      targetId: Number(hit.id),
+      targetId: Number(hit.id), // 현재 표시되는 id
+      baseId: (hit as any)._origId ?? Number(hit.id), // 원본 트랙 id (override 키)
       value: String(hit.id),
       left, top,
       geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf },
@@ -526,10 +530,25 @@ export default function OverlayCanvas(){
     if (!Number.isInteger(newId) || newId <= 0) { setIdEdit(v=>({...v, show:false})); return }
     if (newId === idEdit.targetId) { setIdEdit(v=>({...v, show:false})); return }
     // 히스토리 포함 ID 변경
+    // baseId(override 키) 사용
+    // 중복 ID 검사: 현재 프레임 predBoxes에서 자신(baseId) 제외 동일 id 존재 시 next free id 자동 할당
+    const used = new Set<number>();
+    for (const pb of predBoxes) {
+      // pb.id는 표시 id
+      used.add(Number(pb.id));
+    }
+    let finalId = newId;
+    if (used.has(newId)) {
+      // 자신이 이미 그 id를 갖고 있는 경우는 위에서 걸러짐, 여기서는 다른 박스 충돌
+      let candidate = newId;
+      while (used.has(candidate)) candidate++;
+      window.alert(`ID ${newId} 이미 존재하여 ${candidate} 로 자동 재할당되었습니다.`);
+      finalId = candidate;
+    }
     useFrameStore.getState().changeOverrideIdWithHistory(
-      idEdit.frame, idEdit.targetId, newId, idEdit.geom
+      idEdit.frame, idEdit.baseId, finalId, idEdit.geom
     )
-    setActiveId(newId)
+    setActiveId(finalId)
     setIdEdit(v=>({...v, show:false}))
   }
 

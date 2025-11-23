@@ -27,6 +27,7 @@ async def ws_preview(ws: WebSocket):
             pred_id = payload.get("pred_id")
             iou_thr = payload.get("iou", 0.5)
             conf_thr= payload.get("conf", 0.0)
+            overrides = payload.get("overrides") or {}
 
             try:    iou_thr = float(iou_thr)
             except: iou_thr = 0.5
@@ -45,13 +46,84 @@ async def ws_preview(ws: WebSocket):
                 continue
 
             # use detailed evaluator to get idsw frames for the preview websocket
-            mota, stats, _idsw_frames, _details = evaluate_mota_detailed(gt_path, pr_path, iou_thr, conf_thr)
+            # 기본 평가 데이터 로드 후 overrides 적용을 위해 prediction 임시 변형
+            # overrides 형식: {"frame_number": {"orig_id": new_id, ...}, ...}
+            # 평가 함수는 파일을 직접 읽으므로 여기서 재작성한 temp 파일을 사용
+            try:
+                if overrides and isinstance(overrides, dict):
+                    import tempfile
+                    import shutil
+                    # 원본 pred 파일을 파싱 후 id 치환
+                    rows: list[list[str]] = []
+                    with pr_path.open("r", encoding="utf-8") as fp:
+                        import csv as _csv
+                        reader = _csv.reader(fp)
+                        for row in reader:
+                            if not row:
+                                continue
+                            try:
+                                fr = int(float(row[0]))
+                                tid_raw = row[1]
+                                tid = int(float(tid_raw))
+                            except Exception:
+                                rows.append(row)
+                                continue
+                            frame_map = overrides.get(str(fr)) or overrides.get(fr) or {}
+                            if isinstance(frame_map, dict):
+                                ov = frame_map.get(str(tid)) or frame_map.get(tid)
+                                # backward compat: number => id only
+                                if isinstance(ov, (int, float)):
+                                    row[1] = str(int(ov))
+                                elif isinstance(ov, dict):
+                                    new_id = ov.get("id")
+                                    if isinstance(new_id, (int, float)):
+                                        row[1] = str(int(new_id))
+                                    # geometry
+                                    try:
+                                        x = float(ov.get("x", row[2] if len(row)>2 else 0))
+                                        y = float(ov.get("y", row[3] if len(row)>3 else 0))
+                                        w = float(ov.get("w", row[4] if len(row)>4 else 0))
+                                        h = float(ov.get("h", row[5] if len(row)>5 else 0))
+                                        while len(row) < 6:
+                                            row.append("0")
+                                        row[2] = f"{x}"; row[3] = f"{y}"; row[4] = f"{w}"; row[5] = f"{h}"
+                                    except Exception:
+                                        pass
+                                    # confidence
+                                    if "conf" in ov:
+                                        try:
+                                            cval = float(ov.get("conf"))
+                                            while len(row) < 7:
+                                                row.append("1")
+                                            row[6] = f"{cval}"
+                                        except Exception:
+                                            pass
+                            rows.append(row)
+                    # temp 파일 생성
+                    tmp_dir = tempfile.mkdtemp(prefix="mota_override_")
+                    tmp_pred = Path(tmp_dir) / pr_path.name
+                    with tmp_pred.open("w", encoding="utf-8", newline="") as wfp:
+                        import csv as _csv2
+                        writer = _csv2.writer(wfp)
+                        writer.writerows(rows)
+                    mota, stats, _idsw_frames, _details = evaluate_mota_detailed(gt_path, tmp_pred, iou_thr, conf_thr)
+                    # 임시 디렉토리 제거
+                    try:
+                        shutil.rmtree(tmp_dir)
+                    except Exception:
+                        pass
+                else:
+                    mota, stats, _idsw_frames, _details = evaluate_mota_detailed(gt_path, pr_path, iou_thr, conf_thr)
+            except Exception as e:
+                await ws.send_text(json.dumps({"error": f"override processing failed: {e}"}))
+                continue
+            # 통일된 소문자 키 사용
             resp = {
-                "MOTA": mota,
-                "TP": stats["TP"],
-                "FP": stats["FP"],
-                "FN": stats["FN"],
-                "IDSW": stats["IDSW"],
+                "mota": mota,
+                "tp": stats["TP"],
+                "fp": stats["FP"],
+                "fn": stats["FN"],
+                "idsw": stats["IDSW"],
             }
             await ws.send_text(json.dumps(resp))
     except WebSocketDisconnect:

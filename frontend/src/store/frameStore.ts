@@ -38,6 +38,7 @@ type State = {
 
   // ID Switch 감지
   idswFrames: number[];
+  idswDetails: { f:number; tp:number; fp:number; fn:number; idsw:boolean; gt:number; pred:number }[];
 
   // 이미지 캐시 (디코드된 Image)
   imgCache: Map<string, Promise<HTMLImageElement>>;
@@ -88,7 +89,6 @@ type State = {
   resetFrame: (frame:number)=>void;
   resetCurrentFrame: ()=>void;
   exportModifiedPred: ()=>void;
-  scanIdSwitches: ()=>Promise<void>;
 };
 
 // ---- Tracks 캐시 (변경 없음)
@@ -283,6 +283,7 @@ const useFrameStore = create<State>((set, get) => ({
   redoStack: [],
 
   idswFrames: [],
+  idswDetails: [],
 
   imgCache: new Map(),
   thumbnailCache: new Map(),
@@ -893,32 +894,21 @@ const useFrameStore = create<State>((set, get) => ({
   },
 
   changeOverrideIdWithHistory: (frame, oldId, newId, geom)=>{
-    const curMap = new Map(get().overrides.get(frame) || []);
-    const before = curMap.get(oldId);
-    const newBox: Box = { id: newId, ...geom };
-    curMap.delete(oldId);
-    curMap.set(newId, newBox);
-    const overrides = new Map(get().overrides);
+    // 키(oldId)는 유지하고 Box 내부 id 필드만 변경하여
+    // base pred 리스트와 매핑 일관성 유지 (display 용 id 변경)
+    const overridesOrig = get().overrides;
+    const curMap = new Map(overridesOrig.get(frame) || []);
+    const baseBefore = curMap.get(oldId);
+    // 이전 상태 저장 (deep clone)
+    const before: Box | undefined = baseBefore ? { ...baseBefore } : undefined;
+    const nextBox: Box = { id: newId, ...geom };
+    curMap.set(oldId, nextBox);
+    const overrides = new Map(overridesOrig);
     overrides.set(frame, curMap);
-    
-    // ID 변경을 히스토리에 기록 (oldId 삭제, newId 추가)
-    // Phase 2: undo 스택 크기 제한
     const MAX_UNDO_STACK = 100;
-    let undoStack = [
-      ...get().undoStack,
-      { frame, id: oldId, before, after: undefined },
-      { frame, id: newId, before: undefined, after: newBox }
-    ];
-    if (undoStack.length > MAX_UNDO_STACK) {
-      undoStack = undoStack.slice(-MAX_UNDO_STACK);
-    }
-    
-    set({
-      overrides,
-      overrideVersion: get().overrideVersion + 1,
-      undoStack,
-      redoStack: [],
-    });
+    let undoStack = [...get().undoStack, { frame, id: oldId, before, after: nextBox }];
+    if (undoStack.length > MAX_UNDO_STACK) undoStack = undoStack.slice(-MAX_UNDO_STACK);
+    set({ overrides, overrideVersion: get().overrideVersion + 1, undoStack, redoStack: [] });
   },
 
   exportModifiedPred: ()=>{
@@ -935,10 +925,10 @@ const useFrameStore = create<State>((set, get) => ({
     for (const frame of frames) {
       const frameOverrides = overrides.get(frame.i);
       if (!frameOverrides || frameOverrides.size === 0) continue;
-      
-      for (const [boxId, box] of frameOverrides.entries()) {
+      for (const [, box] of frameOverrides.entries()) {
         const conf = box.conf ?? 1.0;
-        const line = `${frame.i},${boxId},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`;
+        // Box 내부 id 필드를 사용 (표시/수정된 id 반영)
+        const line = `${frame.i},${box.id},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`;
         lines.push(line);
       }
     }
@@ -957,74 +947,7 @@ const useFrameStore = create<State>((set, get) => ({
     URL.revokeObjectURL(url);
   },
 
-  scanIdSwitches: async ()=>{
-    const gtId = get().gtAnnotationId;
-    const predId = get().predAnnotationId;
-    const frames = get().frames;
-    
-    if (!gtId || !predId) { alert('GT와 Pred를 모두 불러오세요'); return; }
-    if (frames.length === 0) { alert('프레임을 먼저 불러오세요'); return; }
-    
-    const idswSet = new Set<number>();
-    const iouThr = get().iou;
-    
-    // 각 프레임에서 ID 스위치 감지
-    for (const frame of frames) {
-      try {
-        const gtBoxes = await fetchFrameBoxes(gtId, frame.i);
-        const predBoxes = await fetchFrameBoxes(predId, frame.i);
-        
-        if (gtBoxes.length === 0 || predBoxes.length === 0) continue;
-        
-        // 그리디 매칭 (간단한 버전)
-        const gtAssigned = new Map<number, number>(); // gt_idx -> pred_idx
-        const predUsed = new Set<number>();
-        
-        // IoU 기준 정렬
-        const pairs: {gtIdx:number; predIdx:number; iov:number}[] = [];
-        for (let gi = 0; gi < gtBoxes.length; gi++) {
-          for (let pi = 0; pi < predBoxes.length; pi++) {
-            const gBbox = gtBoxes[gi].bbox as [number,number,number,number];
-            const pBbox = predBoxes[pi].bbox as [number,number,number,number];
-            const [gx,gy,gw,gh] = gBbox;
-            const [px,py,pw,ph] = pBbox;
-            const x1 = Math.max(gx, px), y1 = Math.max(gy, py);
-            const x2 = Math.min(gx+gw, px+pw), y2 = Math.min(gy+gh, py+ph);
-            const iw = Math.max(0, x2-x1), ih = Math.max(0, y2-y1);
-            const inter = iw*ih;
-            const union = gw*gh + pw*ph - inter;
-            const iov = union > 0 ? inter / union : 0;
-            if (iov >= iouThr) {
-              pairs.push({gtIdx: gi, predIdx: pi, iov});
-            }
-          }
-        }
-        
-        pairs.sort((a,b)=> b.iov - a.iov);
-        for (const p of pairs) {
-          if (!gtAssigned.has(p.gtIdx) && !predUsed.has(p.predIdx)) {
-            gtAssigned.set(p.gtIdx, p.predIdx);
-            predUsed.add(p.predIdx);
-          }
-        }
-        
-        // ID 스위치 검사
-        for (const [gtIdx, predIdx] of gtAssigned) {
-          const gtId_val = Number(gtBoxes[gtIdx].id);
-          const predId_val = Number(predBoxes[predIdx].id);
-          if (gtId_val !== predId_val) {
-            idswSet.add(frame.i);
-            break; // 프레임당 한 번만 기록
-          }
-        }
-      } catch (e) {
-        console.warn(`IDSW 스캔 오류 (프레임 ${frame.i}):`, e);
-      }
-    }
-    
-    const idswFrames = Array.from(idswSet).sort((a,b)=>a-b);
-    set({ idswFrames });
-  },
+  // (로컬 스캔 제거됨) - 서버 override 평가로 대체
 }));
 
 export default useFrameStore;
