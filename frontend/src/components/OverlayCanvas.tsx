@@ -74,6 +74,8 @@ export default function OverlayCanvas(){
   const rootRef = useRef<HTMLDivElement>(null)
   const cnvRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement|null>(null);
+  // 최근 성공적으로 디코드된 이미지 -> 다음 프레임 이미지 준비 안 되었을 때 깜빡임 최소화
+  const lastImgRef = useRef<HTMLImageElement|null>(null);
   const fm = useMemo(() => frames[cur] || null, [frames, cur]);
   
   // Frame cache for rendered canvases (using OffscreenCanvas when available)
@@ -116,8 +118,10 @@ export default function OverlayCanvas(){
           await loadedImg.decode();
         }
         setImg(loadedImg);
+        lastImgRef.current = loadedImg; // 최신 이미지 보관
       } catch {
         setImg(loadedImg); // Fallback if decode fails
+        lastImgRef.current = loadedImg;
       }
     }).catch(()=>setImg(null));
     
@@ -323,6 +327,9 @@ export default function OverlayCanvas(){
       // Draw image
       if (img) {
         offscreenCtx.drawImage(img, layout.ox, layout.oy, layout.dw, layout.dh);
+      } else if (lastImgRef.current) {
+        // 이전 프레임 이미지 재사용 (흰색 깜빡임 제거)
+        offscreenCtx.drawImage(lastImgRef.current, layout.ox, layout.oy, layout.dw, layout.dh);
       } else {
         offscreenCtx.fillStyle = '#ffffff';
         offscreenCtx.fillRect(0, 0, width, height);

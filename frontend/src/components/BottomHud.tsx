@@ -65,8 +65,13 @@ export default function BottomHud() {
     // Find frame index by frame number
     const targetIndex = frames.findIndex(f => f.i === frameNum)
     if (targetIndex >= 0) {
+      // 먼 점프 시 즉시 URL 생성 및 이미지 디코드 트리거
+      const st = useFrameStore.getState()
+      st.ensureFrameURL(targetIndex)
       setCur(targetIndex)
-      prefetchAround(targetIndex, 3)
+      prefetchAround(targetIndex, 5)
+      const url = st.frames[targetIndex].url
+      if (url) { st.getImage(url).catch(()=>{}) }
     }
     cancelEdit()
   }, [editValue, frames, setCur, prefetchAround, cancelEdit])

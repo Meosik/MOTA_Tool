@@ -1,5 +1,5 @@
 // frontend/src/components/LeftPanel.tsx
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import useFrameStore from '../store/frameStore'
 
 const PAGE = 8
@@ -7,13 +7,16 @@ const PAGE = 8
 type DetailItem = { f: number; tp: number; fp: number; fn: number; idsw: boolean; gt: number; pred: number }
 
 export default function LeftPanel(){
-  const { frames, gtAnnotationId, predAnnotationId, iou, conf, setCur } = useFrameStore(s=>({
+  const { frames, gtAnnotationId, predAnnotationId, iou, conf, setCur, getThumbnail, requestThumbnail, thumbnailVersion } = useFrameStore(s=>({
     frames: s.frames,
     gtAnnotationId: s.gtAnnotationId,
     predAnnotationId: s.predAnnotationId,
     iou: s.iou,
     conf: s.conf,
     setCur: s.setCur,
+    getThumbnail: s.getThumbnail,
+    requestThumbnail: s.requestThumbnail,
+    thumbnailVersion: s.thumbnailVersion,
   }))
 
   const [idswFrames, setIdswFrames] = useState<number[]>([])
@@ -30,6 +33,14 @@ export default function LeftPanel(){
     const map = new Map(details.map(d => [d.f, d]))
     return ids.map(f => map.get(f) || { f, tp:0, fp:0, fn:0, idsw:true, gt:0, pred:0 })
   }, [idswFrames, details, curPage])
+
+  // 저해상도 썸네일 생성 트리거
+  useEffect(()=>{
+    for (const item of pageItems){
+      const thumb = getThumbnail(item.f);
+      if (!thumb) requestThumbnail(item.f);
+    }
+  }, [pageItems, getThumbnail, requestThumbnail, thumbnailVersion])
 
   async function scanServer(){
     setPage(0)
@@ -87,7 +98,7 @@ export default function LeftPanel(){
         )}
         {pageItems.map(item => {
           const idx = frames.findIndex(f=>f.i===item.f)
-          const url = idx>=0 ? frames[idx].url : undefined
+          const url = getThumbnail(item.f) || (idx>=0 ? frames[idx].url : undefined)
           return (
             <button
               key={item.f}
@@ -96,9 +107,9 @@ export default function LeftPanel(){
               title={`프레임 ${item.f}로 이동`}
             >
               {url ? (
-                <img src={url} className="w-16 h-10 object-cover rounded" />
+                <img src={url} className="w-16 h-10 object-cover rounded" loading="lazy" />
               ) : (
-                <div className="w-16 h-10 bg-gray-200 rounded" />
+                <div className="w-16 h-10 bg-gray-200 rounded animate-pulse" />
               )}
               <div className="text-xs flex-1">
                 <div className="font-medium flex items-center gap-1">

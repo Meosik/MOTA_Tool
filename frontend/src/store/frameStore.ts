@@ -41,6 +41,9 @@ type State = {
 
   // 이미지 캐시 (디코드된 Image)
   imgCache: Map<string, Promise<HTMLImageElement>>;
+  // 썸네일 캐시 (저해상도 dataURL)
+  thumbnailCache: Map<number, string>;
+  thumbnailVersion: number;
 
   // 트랙 데이터 변경 버전 (박스 캐시 업데이트 감지용)
   tracksVersion: number;
@@ -73,6 +76,9 @@ type State = {
   startTrackStream: (range:{f0:number; f1:number})=>void;
   stopTrackStream: ()=>void;
   _streamHandle?: TrackStreamHandle;
+  ensureFrameURL: (index:number)=>void;
+  getThumbnail: (frame:number)=>string|undefined;
+  requestThumbnail: (frame:number)=>void;
 
   applyOverrideWithHistory:(frame:number, id:number, next:Box)=>void;
   changeOverrideIdWithHistory:(frame:number, oldId:number, newId:number, geom:Omit<Box,'id'>)=>void;
@@ -97,16 +103,23 @@ function toBox(fb:FlatBox): Box {
 const MAX_URLS = 150; // Phase 1: 축소 (400 → 150) - 메모리 절약
 const urlLRU: string[] = [];             // 최근 사용 순
 const urlOwner = new Map<string, number>(); // url -> frameIndex
+// 현재 표시/근접 프레임 보호용 URL 집합 (LRU 축출 제외)
+const protectedURLs = new Set<string>();
 
 // ---- Image Cache LRU (Phase 1: 새로 추가)
 const MAX_DECODED_IMAGES = 200; // ~600MB 최대
 const imgCacheLRU: string[] = [];
+// 썸네일 LRU
+const THUMB_MAX = 300;
+const thumbLRU: number[] = [];
 
 // 동시 디코드 제한 (브라우저 리소스 오류 방지)
 const MAX_DECODE_CONCURRENCY = 4;
 let activeDecodes = 0;
 type DecodeJob = { url:string; resolve:(img:HTMLImageElement)=>void; reject:(e:any)=>void };
 const decodeQueue: DecodeJob[] = [];
+// 디코드 중인 URL은 축출 대상에서 제외하여 ERR_FILE_NOT_FOUND 방지
+const decodingURLs = new Set<string>();
 
 function processDecodeQueue(){
   while (activeDecodes < MAX_DECODE_CONCURRENCY && decodeQueue.length){
@@ -117,6 +130,7 @@ function processDecodeQueue(){
     img.decoding = 'async';
     img.onload = () => {
       activeDecodes--;
+      decodingURLs.delete(job.url);
       touchURL(job.url);
       const cache = useFrameStore.getState().imgCache;
       touchDecodedImage(job.url, cache);
@@ -125,9 +139,11 @@ function processDecodeQueue(){
     };
     img.onerror = (e) => {
       activeDecodes--;
+      decodingURLs.delete(job.url);
       job.reject(e);
       processDecodeQueue();
     };
+    decodingURLs.add(job.url);
     img.src = job.url;
   }
 }
@@ -136,8 +152,22 @@ function touchURL(url:string){
   const i = urlLRU.indexOf(url);
   if (i>=0) urlLRU.splice(i,1);
   urlLRU.push(url);
+  // 초과 시 보호되지 않은 오래된 URL만 제거
   while (urlLRU.length > MAX_URLS){
-    const old = urlLRU.shift()!;
+    const victimIdx = urlLRU.findIndex(u => !protectedURLs.has(u) && !decodingURLs.has(u));
+    if (victimIdx === -1) break; // 모두 보호 중
+    const [old] = urlLRU.splice(victimIdx,1);
+    // urlOwner 및 frame 객체에서 제거하여 향후 재생성 가능하게 함
+    const ownerIdx = urlOwner.get(old);
+    if (ownerIdx != null){
+      const st = useFrameStore.getState();
+      const frames = st.frames.slice();
+      if (frames[ownerIdx] && frames[ownerIdx].url === old){
+        frames[ownerIdx] = { ...frames[ownerIdx], url: undefined };
+        useFrameStore.setState({ frames });
+      }
+      urlOwner.delete(old);
+    }
     try { URL.revokeObjectURL(old); } catch {}
   }
 }
@@ -167,10 +197,16 @@ function ensureObjectURLFor(index:number){
   const frames = st.frames;
   if (index<0 || index>=frames.length) return;
   const f = frames[index];
-  if (f.url) { touchURL(f.url); return; }
+  // 기존 URL이 있고 urlLRU에 없다면 이미 revoke 되었을 가능성 -> 새로 생성
+  if (f.url && urlLRU.includes(f.url)) { touchURL(f.url); return; }
+  if (f.url && !urlLRU.includes(f.url)) {
+    try { URL.revokeObjectURL(f.url); } catch {}
+  }
   if (!f.file) return; // URL 생성 불가
   const url = URL.createObjectURL(f.file);
   urlOwner.set(url, index);
+  // 생성 직후 보호: 디코드 시작 전 LRU 축출 방지
+  protectedURLs.add(url);
   touchURL(url);
   useFrameStore.setState({ frames: attachURLToFrame(frames, index, url) });
 }
@@ -237,11 +273,49 @@ const useFrameStore = create<State>((set, get) => ({
   idswFrames: [],
 
   imgCache: new Map(),
+  thumbnailCache: new Map(),
+  thumbnailVersion: 0,
 
   tracksVersion: 0,
   allTracksLoaded: false,
 
-  setFrames: (frames)=> set({ frames, cur: 0 }),
+  setFrames: (frames)=> {
+    set({ frames, cur: 0 });
+    if (frames.length){
+      // 첫 프레임 URL 및 박스 즉시 확보
+      ensureObjectURLFor(0);
+      schedulePrefetch(0, 3);
+      const fr = frames[0];
+      const stNow = get();
+      const annPairs: [('gt'|'pred'), string|undefined][] = [['gt', stNow.gtAnnotationId], ['pred', stNow.predAnnotationId]];
+      for (const [kind, annId] of annPairs){
+        if (!annId) continue;
+        const key = `${kind}:${annId}:${fr.i}-${fr.i}`;
+        if (!inFlight.has(key)){
+          const p = (async()=>{
+            try {
+              const data = await fetchTracksWindow(annId, fr.i, fr.i);
+              let added = 0;
+              const target = kind==='gt' ? gtCache : prCache;
+              for (const tr of data.tracks || []){
+                for (const frd of tr.frames || []){
+                  const k = `${annId}:${frd.f}`;
+                  const list = target.get(k) || [];
+                  if (!list.find(v => String(v.id)===String(tr.id))){
+                    const fb: FlatBox = { id: tr.id, bbox: frd.bbox.map(Number) as any, ...(frd.conf!=null?{conf:Number(frd.conf)}:{}) };
+                    list.push(fb); target.set(k, list); added++;
+                  }
+                }
+              }
+              // tracksVersion 증가 (added==0이어도 UI 트리거)
+              set({ tracksVersion: get().tracksVersion + 1 });
+            } catch {}
+          })().finally(()=> inFlight.delete(key));
+          inFlight.set(key, p);
+        }
+      }
+    }
+  },
 
   setCur: (idx)=>{
     const N = get().frames.length;
@@ -266,6 +340,46 @@ const useFrameStore = create<State>((set, get) => ({
       if (!get().allTracksLoaded) {
         if (get().gtAnnotationId) { get().fillCacheWindow('gt', f0, f1).catch(()=>{}); }
         if (get().predAnnotationId) { get().fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+      }
+    }
+    // 보호 URL 갱신 (현재 프레임 중심 확장 구간)
+    protectedURLs.clear();
+    const protectLo = Math.max(0, clamped - radius*2);
+    const protectHi = Math.min(N-1, clamped + radius*2);
+    for (let i = protectLo; i <= protectHi; i++) {
+      const u = get().frames[i]?.url; if (u) protectedURLs.add(u);
+    }
+    // 현재 프레임 박스가 없으면 즉시 단일 fetch (GT/PRED 각각)
+    const fr = get().frames[clamped];
+    if (fr) {
+      const annPairs: [('gt'|'pred'), string|undefined][] = [['gt', get().gtAnnotationId], ['pred', get().predAnnotationId]];
+      for (const [kind, annId] of annPairs){
+        if (!annId) continue;
+        const existing = get().getFrameBoxes(kind, fr.i);
+        if (existing.length === 0){
+          const key = `${kind}:${annId}:${fr.i}-${fr.i}`;
+          if (!inFlight.has(key)){
+            const p = (async()=>{
+              try {
+                const data = await fetchTracksWindow(annId, fr.i, fr.i);
+                let added = 0;
+                const target = kind==='gt' ? gtCache : prCache;
+                for (const tr of data.tracks || []){
+                  for (const frd of tr.frames || []){
+                    const k = `${annId}:${frd.f}`;
+                    const list = target.get(k) || [];
+                    if (!list.find(v => String(v.id)===String(tr.id))){
+                      const fb: FlatBox = { id: tr.id, bbox: frd.bbox.map(Number) as any, ...(frd.conf!=null?{conf:Number(frd.conf)}:{}) };
+                      list.push(fb); target.set(k, list); added++;
+                    }
+                  }
+                }
+                set({ tracksVersion: get().tracksVersion + 1 });
+              } catch {}
+            })().finally(()=> inFlight.delete(key));
+            inFlight.set(key, p);
+          }
+        }
       }
     }
   },
@@ -368,6 +482,35 @@ const useFrameStore = create<State>((set, get) => ({
       }
     }
     set({ gtAnnotationId: id });
+    // 첫 프레임 즉시 단일 프레임 fetch (박스 초기 표시 보장)
+    const fr = get().frames[get().cur];
+    if (fr && id) {
+      const ann = id;
+      const key = `gt:${ann}:${fr.i}-${fr.i}`;
+      if (!inFlight.has(key)) {
+        const p = (async()=>{
+          try {
+            const data = await fetchTracksWindow(ann, fr.i, fr.i);
+            let added = 0;
+            for (const tr of data.tracks || []) {
+              for (const frd of tr.frames || []) {
+                const k = `${ann}:${frd.f}`;
+                const list = gtCache.get(k) || [];
+                if (!list.find(v => String(v.id)===String(tr.id))) {
+                  const fb: FlatBox = { id: tr.id, bbox: frd.bbox.map(Number) as any, ...(frd.conf!=null?{conf:Number(frd.conf)}:{}) };
+                  list.push(fb); gtCache.set(k, list); added++;
+                }
+              }
+            }
+            // 첫 프레임 표시 강제 트리거 (added 0이어도 업데이트)
+            set({ tracksVersion: get().tracksVersion + 1 });
+            // 동일 인덱스 재설정으로 prefetch & 보호셋 재평가
+            useFrameStore.getState().setCur(useFrameStore.getState().cur);
+          } catch {}
+        })().finally(()=> inFlight.delete(key));
+        inFlight.set(key, p);
+      }
+    }
   },
   setPred: (id)=> {
     // Phase 1: 새 Pred 파일 로드 시 이전 Pred 캐시 정리
@@ -381,6 +524,33 @@ const useFrameStore = create<State>((set, get) => ({
       }
     }
     set({ predAnnotationId: id });
+    // 첫 프레임 즉시 단일 프레임 fetch (박스 초기 표시 보장)
+    const fr = get().frames[get().cur];
+    if (fr && id) {
+      const ann = id;
+      const key = `pred:${ann}:${fr.i}-${fr.i}`;
+      if (!inFlight.has(key)) {
+        const p = (async()=>{
+          try {
+            const data = await fetchTracksWindow(ann, fr.i, fr.i);
+            let added = 0;
+            for (const tr of data.tracks || []) {
+              for (const frd of tr.frames || []) {
+                const k = `${ann}:${frd.f}`;
+                const list = prCache.get(k) || [];
+                if (!list.find(v => String(v.id)===String(tr.id))) {
+                  const fb: FlatBox = { id: tr.id, bbox: frd.bbox.map(Number) as any, ...(frd.conf!=null?{conf:Number(frd.conf)}:{}) };
+                  list.push(fb); prCache.set(k, list); added++;
+                }
+              }
+            }
+            set({ tracksVersion: get().tracksVersion + 1 });
+            useFrameStore.getState().setCur(useFrameStore.getState().cur);
+          } catch {}
+        })().finally(()=> inFlight.delete(key));
+        inFlight.set(key, p);
+      }
+    }
   },
 
   setIou: (v)=> set({ iou: Math.max(0, Math.min(1, v)) }),
@@ -539,6 +709,85 @@ const useFrameStore = create<State>((set, get) => ({
     const h = (get() as any)._streamHandle as TrackStreamHandle | undefined;
     if (h) { try { h.close(); } catch {} }
     set({ _streamHandle: undefined });
+  },
+
+  ensureFrameURL: (index:number)=>{
+    ensureObjectURLFor(index);
+  },
+  getThumbnail: (frame:number) => {
+    return get().thumbnailCache.get(frame);
+  },
+  requestThumbnail: (frame:number) => {
+    const st = get();
+    if (st.thumbnailCache.has(frame)) return; // 이미 생성됨
+    const idx = st.frames.findIndex(f=>f.i===frame);
+    if (idx < 0) return;
+    ensureObjectURLFor(idx);
+    const url = st.frames[idx].url;
+    if (!url) return;
+    // 이미지 로딩 후 저해상도 렌더링
+    st.getImage(url).then(img => {
+      try {
+        const TW = 96, TH = 60; // 목표 썸네일 크기
+        let canvas: HTMLCanvasElement | OffscreenCanvas;
+        let ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+        if (typeof OffscreenCanvas !== 'undefined') {
+          canvas = new OffscreenCanvas(TW, TH);
+          ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
+        } else {
+          canvas = document.createElement('canvas');
+          canvas.width = TW; canvas.height = TH;
+          ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+        }
+        // 배경 채우기 (흰색 혹은 검정 선택 가능, 여기서는 흰색)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0,0,TW,TH);
+        // 원본 비율 유지하여 중앙 정렬
+        const iw = img.naturalWidth || img.width;
+        const ih = img.naturalHeight || img.height;
+        const scale = Math.min(TW/iw, TH/ih);
+        const dw = iw*scale; const dh = ih*scale;
+        const ox = (TW - dw)/2; const oy = (TH - dh)/2;
+        ctx.drawImage(img, ox, oy, dw, dh);
+        let dataURL: string;
+        if (canvas instanceof OffscreenCanvas) {
+          dataURL = (canvas as OffscreenCanvas).convertToBlob({ type: 'image/jpeg', quality: 0.8 })
+            .then(blob => new Promise<string>(res => { const fr = new FileReader(); fr.onload = () => res(fr.result as string); fr.readAsDataURL(blob); }))
+            .catch(()=> '') as any; // handled below async
+          if (typeof dataURL === 'string') {
+            // unlikely path
+            st.thumbnailCache.set(frame, dataURL);
+            thumbLRU.push(frame);
+            while (thumbLRU.length > THUMB_MAX) {
+              const victim = thumbLRU.shift()!;
+              if (victim !== frame) st.thumbnailCache.delete(victim);
+            }
+            set({ thumbnailVersion: st.thumbnailVersion + 1 });
+          } else {
+            (dataURL as Promise<string>).then(urlStr => {
+              if (!urlStr) return;
+              const st2 = get();
+              st2.thumbnailCache.set(frame, urlStr);
+              thumbLRU.push(frame);
+              while (thumbLRU.length > THUMB_MAX) {
+                const victim = thumbLRU.shift()!;
+                if (victim !== frame) st2.thumbnailCache.delete(victim);
+              }
+              set({ thumbnailVersion: st2.thumbnailVersion + 1 });
+            });
+          }
+        } else {
+          dataURL = (canvas as HTMLCanvasElement).toDataURL('image/jpeg', 0.8);
+          st.thumbnailCache.set(frame, dataURL);
+          thumbLRU.push(frame);
+          while (thumbLRU.length > THUMB_MAX) {
+            const victim = thumbLRU.shift()!;
+            if (victim !== frame) st.thumbnailCache.delete(victim);
+          }
+          set({ thumbnailVersion: st.thumbnailVersion + 1 });
+        }
+      } catch {}
+    }).catch(()=>{});
   },
 
   applyOverrideWithHistory: (frame, id, next)=>{
