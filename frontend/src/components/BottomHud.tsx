@@ -1,21 +1,29 @@
 // frontend/src/components/BottomHud.tsx
 import React, { useCallback, useState, useEffect, useRef } from 'react'
 import useFrameStore from '../store/frameStore'
-import { ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Play, Pause, Loader2 } from 'lucide-react'
 
 export default function BottomHud() {
-  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying } = useFrameStore(s => ({
+  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying, gtAnnotationId, predAnnotationId, getImage, preloadAllBoxes, startTrackStream, stopTrackStream } = useFrameStore(s => ({
     frames: s.frames,
     cur: s.cur,
     setCur: s.setCur,
     prefetchAround: s.prefetchAround,
     isPlaying: s.isPlaying,
     setPlaying: s.setPlaying,
+    gtAnnotationId: s.gtAnnotationId,
+    predAnnotationId: s.predAnnotationId,
+    getImage: s.getImage,
+    preloadAllBoxes: s.preloadAllBoxes,
+    startTrackStream: s.startTrackStream,
+    stopTrackStream: s.stopTrackStream,
   }))
 
   const [fps, setFps] = useState(30)
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
+  const [isPreloading, setIsPreloading] = useState(false)
+  const [preloadProgress, setPreloadProgress] = useState(0)
   const playIntervalRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number>(0)
 
@@ -57,15 +65,79 @@ export default function BottomHud() {
     // Find frame index by frame number
     const targetIndex = frames.findIndex(f => f.i === frameNum)
     if (targetIndex >= 0) {
+      // 먼 점프 시 즉시 URL 생성 및 이미지 디코드 트리거
+      const st = useFrameStore.getState()
+      st.ensureFrameURL(targetIndex)
       setCur(targetIndex)
-      prefetchAround(targetIndex, 3)
+      prefetchAround(targetIndex, 5)
+      const url = st.frames[targetIndex].url
+      if (url) { st.getImage(url, true).catch(()=>{}) } // 점프 프레임 우선 디코드
     }
     cancelEdit()
   }, [editValue, frames, setCur, prefetchAround, cancelEdit])
 
+  const preloadFrames = useCallback(async () => {
+    if (isPlaying || frames.length === 0) return
+
+    setIsPreloading(true)
+    setPreloadProgress(0)
+
+    try {
+      const startIndex = cur
+      const endIndex = Math.min(frames.length - 1, cur + 60) // Preload next 60 frames (2 seconds at 30fps)
+      const totalToPreload = endIndex - startIndex + 1
+
+      // 기본 정책: 전체 박스 선로딩 + 초기 스트림 시작(향후 2초)
+      // 메모리 검사
+      // @ts-ignore
+      const memInfo = performance.memory;
+      if (memInfo) {
+        const usedPercent = memInfo.usedJSHeapSize / memInfo.jsHeapSizeLimit;
+        if (usedPercent > 0.85) console.warn('메모리 사용량 높음: full preload 진행')
+      }
+      await preloadAllBoxes().catch(()=>{})
+      // 스트림 시작 (박스 업데이트나 확장용)
+      const startFrameNum = frames[cur].i;
+      const endFrameNum = frames[Math.min(frames.length - 1, cur + fps*2)]?.i || startFrameNum;
+      startTrackStream({ f0: startFrameNum, f1: endFrameNum });
+
+      // Preload images AND boxes
+      for (let i = startIndex; i <= endIndex; i++) {
+        const frame = frames[i]
+        if (frame?.url) {
+          try {
+            // Preload image
+            const img = await getImage(frame.url)
+            // Force decode
+            if ('decode' in img) {
+              await img.decode()
+            }
+          } catch (e) {
+            // Skip failed images
+          }
+        }
+        setPreloadProgress(((i - startIndex + 1) / totalToPreload) * 100)
+      }
+
+      // Small delay to show 100% completion
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
+      setIsPreloading(false)
+      setPlaying(true)
+    } catch (error) {
+      setIsPreloading(false)
+      console.error('Preload error:', error)
+    }
+  }, [isPlaying, frames, cur, getImage, setPlaying, preloadAllBoxes, fps, startTrackStream])
+
   const togglePlay = useCallback(() => {
-    setPlaying(!isPlaying)
-  }, [isPlaying, setPlaying])
+    if (isPlaying) {
+      setPlaying(false)
+    } else {
+      // Start preloading before playback
+      preloadFrames()
+    }
+  }, [isPlaying, setPlaying, preloadFrames])
 
   // Efficient playback using requestAnimationFrame
   useEffect(() => {
@@ -120,12 +192,35 @@ export default function BottomHud() {
   if (total === 0) return null
 
   return (
-    <div
-      className="pointer-events-auto fixed bottom-4 left-1/2 -translate-x-1/2
-                 bg-white/90 backdrop-blur border shadow rounded-lg
-                 px-4 py-2 flex items-center gap-3"
-      style={{ zIndex: 40 }}
-    >
+    <>
+      {/* Preloading Modal */}
+      {isPreloading && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center" style={{ zIndex: 9999 }}>
+          <div className="bg-white rounded-lg shadow-xl p-6 min-w-[300px]">
+            <div className="flex items-center gap-3 mb-4">
+              <Loader2 className="animate-spin" size={24} />
+              <h3 className="text-lg font-semibold">프레임 로딩 중...</h3>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+              <div 
+                className="bg-blue-500 h-full transition-all duration-300 ease-out"
+                style={{ width: `${preloadProgress}%` }}
+              />
+            </div>
+            <p className="text-sm text-gray-600 mt-2 text-center">
+              {Math.round(preloadProgress)}%
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom HUD */}
+      <div
+        className="pointer-events-auto fixed bottom-4 left-1/2 -translate-x-1/2
+                   bg-white/90 backdrop-blur border shadow rounded-lg
+                   px-4 py-2 flex items-center gap-3"
+        style={{ zIndex: 40 }}
+      >
       {/* Previous button */}
       <button
         className="p-1.5 rounded-full border hover:bg-gray-50 disabled:opacity-40"
@@ -185,13 +280,16 @@ export default function BottomHud() {
         </select>
       </div>
 
+      {/* Load selector 제거됨: now always full preload + stream */}
+
       {/* Play/Pause button */}
       <button
-        className="p-1.5 rounded-full border hover:bg-gray-50 bg-blue-50 hover:bg-blue-100"
+        className="p-1.5 rounded-full border hover:bg-gray-50 bg-blue-50 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
         onClick={togglePlay}
-        title={isPlaying ? '일시정지' : '재생'}
+        disabled={isPreloading}
+        title={isPlaying ? '일시정지' : (isPreloading ? '로딩 중...' : '재생')}
       >
-        {isPlaying ? <Pause size={18}/> : <Play size={18}/>}
+        {isPreloading ? <Loader2 className="animate-spin" size={18}/> : (isPlaying ? <Pause size={18}/> : <Play size={18}/>)}
       </button>
 
       {/* Next button */}
@@ -204,5 +302,6 @@ export default function BottomHud() {
         <ChevronRight size={18}/>
       </button>
     </div>
+    </>
   )
 }

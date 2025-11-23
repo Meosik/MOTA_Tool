@@ -351,3 +351,143 @@ cd test_data/coco_val2017
 - **COCO Format**: https://cocodataset.org/#format-data
 - **MOTA_Tool Docs**: `/README.md`, `/ARCHITECTURE.md`
 - **Backend API**: http://127.0.0.1:8000/docs (실행 중일 때)
+
+---
+
+# MOTA Mode Testing Guide
+
+## 🎯 목적
+MOTA 모드(다중 객체 추적 평가)의 헝가리안 매칭 기반 MOTA/IDSW/TP/FP/FN 계산, Override 반영 평가, CORS/WS 안정성, 편집 반영 정확성을 테스트하기 위한 가이드입니다.
+
+## 📋 사전 준비
+Docker Compose 또는 로컬 방식은 MAP 가이드와 동일. Backend/Frontend 모두 실행 후 아래 확인:
+
+```bash
+curl -i http://localhost:8000/health
+curl -s http://localhost:8000/cors_origins
+```
+
+예상: `cors_origins` JSON 배열에 `http://localhost:5173`, `http://127.0.0.1:5173` 포함.
+
+## 🧪 기본 MOTA 테스트 데이터 생성
+
+### 1. 최소 MOT 포맷 파일 (동일 GT/Pred → 완전 매칭)
+`appdata/annotations/gt_min.txt` / `appdata/annotations/pred_min.txt` (프레임 0~2):
+```text
+0,1,10,10,20,20,1,-1,-1,-1
+1,1,10,10,20,20,1,-1,-1,-1
+2,1,10,10,20,20,1,-1,-1,-1
+```
+`pred_min.txt`는 동일 내용 복사.
+
+### 2. 헝가리안 매칭 검증용 (3 GT / 3 Pred, 혼합 IoU)
+`gt_hungarian.txt`:
+```text
+0,1,10,10,20,20,1,-1,-1,-1
+0,2,40,10,20,20,1,-1,-1,-1
+0,3,70,10,20,20,1,-1,-1,-1
+```
+`pred_hungarian.txt` (Pred ID 재배치로 그리디 vs 최적 차이 유도):
+```text
+0,101,12,12,20,20,1,-1,-1,-1   # GT1과 IoU 높음
+0,103,42,10,20,20,1,-1,-1,-1   # GT2와 IoU 높음
+0,102,72,14,20,20,1,-1,-1,-1   # GT3과 IoU 높음
+```
+그리디도 여기서는 동일 결과지만, 필요 시 일부 IoU를 교차되게 조정하여 검증(예: 하나를 중간 위치에 배치해 잘못된 우선순위 유도).
+
+## 🔍 API 단위 테스트 (수동 cURL)
+
+1) 기본 평가:
+```bash
+curl -H "Origin: http://localhost:5173" "http://localhost:8000/analysis/idsw_frames?gt_id=gt_min&pred_id=pred_min&iou=0.5&conf=0"
+```
+예상 결과: `mota=1.0`, `tp=3`, `fp=0`, `fn=0`, `idsw=0`, `frames=[]`.
+
+2) Override 평가 (ID 변경으로 IDSW 발생 유도):
+```bash
+curl -H "Origin: http://localhost:5173" -H "Content-Type: application/json" \
+  -d '{"gt_id":"gt_min","pred_id":"pred_min","iou":0.5,"conf":0,"overrides":{"1":{"1":{"id":999,"x":10,"y":10,"w":20,"h":20}}}}' \
+  http://localhost:8000/analysis/idsw_frames_override
+```
+설명: 프레임 1에서 pred id=1 → 999로 변경. 프레임 0 매칭 id=1, 프레임 1 매칭 id=999 → 동일 GT id에 다른 pred id → `idsw=1` 증가 예상.
+
+3) 헝가리안 매칭 검증:
+```bash
+curl -H "Origin: http://localhost:5173" "http://localhost:8000/analysis/idsw_frames?gt_id=gt_hungarian&pred_id=pred_hungarian&iou=0.5&conf=0"
+```
+예상: `tp=3`, 모든 매칭 성공, `mota=1.0`, 교차 IoU 배치 시에도 최적 비용 매칭 유지.
+
+## 🌐 WebSocket Preview 테스트
+Python 간단 스크립트(`tests/ws_preview_test.py` 권장):
+```python
+import asyncio, websockets, json
+
+async def main():
+  uri = "ws://localhost:8000/ws/preview"
+  async with websockets.connect(uri) as ws:
+    payload = {"gt_id":"gt_min","pred_id":"pred_min","iou":0.5,"conf":0,"overrides":{}}
+    await ws.send(json.dumps(payload))
+    msg = await ws.recv()
+    print("Preview:", msg)
+asyncio.run(main())
+```
+예상 응답: `{"mota":1.0,"tp":3,"fp":0,"fn":0,"idsw":0}`.
+
+Override 적용 테스트:
+```python
+payload["overrides"] = {"1":{"1":{"id":999,"x":10,"y":10,"w":20,"h":20}}}
+```
+응답에서 `idsw`가 1로 증가하는지 확인.
+
+## 🔁 편집(Override) 반영 흐름 검증
+1. 프론트에서 박스 ID 변경 → `overrides` Map 반영.
+2. LeftNav 디바운스 후 `POST /analysis/idsw_frames_override` 호출.
+3. Store `idswFrames`, `idswDetails` 갱신 → UI 표시.
+4. WebSocket preview도 동일 override 로직 적용(실시간 MOTA 반영).
+
+체크리스트:
+- [ ] ID 변경 후 350ms 내 서버 재스캔 발생
+- [ ] 동일 프레임에서 다른 ID로 변경 시 IDSW 카운트 증가
+- [ ] Geometry 수정 시 TP/FP/FN 변화 반영 (IoU 임계 경계값 근처 박스 시험)
+
+## ⚙️ 실패/디버그 시나리오
+| 증상 | 점검 | 해결 |
+|------|------|------|
+| 500 응답 + `override evaluation fatal` | 요청 JSON 형식, Path import 여부 | 최근 패치 반영 빌드 확인 |
+| CORS 차단 | `/cors_origins` 목록, `Origin` 헤더 | backend 재빌드 / 확장 비활성화 |
+| WS 조기 종료 | 서버 로그 `CORS-TRACE`, 첫 메시지 송신 여부 | 연결 직후 payload 즉시 send |
+
+## 🧪 추가 자동화 테스트 제안 (pytest)
+`backend/app/tests/unit/test_mota_hungarian.py` (예시):
+```python
+from pathlib import Path
+from app.services.mota import evaluate_mota_detailed
+
+def write(path: Path, lines: list[str]):
+  path.write_text("\n".join(lines), encoding="utf-8")
+
+def test_perfect_match(tmp_path: Path):
+  gt = tmp_path/"gt.txt"; pred = tmp_path/"pred.txt"
+  lines = ["0,1,10,10,20,20,1,-1,-1,-1", "1,1,10,10,20,20,1,-1,-1,-1"]
+  write(gt, lines); write(pred, lines)
+  mota, stats, frames, details = evaluate_mota_detailed(gt, pred, 0.5, 0.0)
+  assert mota == 1.0 and stats["TP"] == 2 and stats["IDSW"] == 0 and frames == []
+
+def test_id_switch(tmp_path: Path):
+  gt = tmp_path/"gt.txt"; pred = tmp_path/"pred.txt"
+  write(gt, ["0,1,10,10,20,20,1", "1,1,10,10,20,20,1"])
+  write(pred, ["0,5,10,10,20,20,1", "1,6,10,10,20,20,1"])  # pred id 변경
+  mota, stats, frames, details = evaluate_mota_detailed(gt, pred, 0.5, 0.0)
+  assert stats["TP"] == 2 and stats["IDSW"] == 1 and frames == [1]
+```
+
+## ✅ 종료 기준
+- API/WS 모두 200 응답 및 올바른 JSON 구조(MOTA/TP/FP/FN/IDSW) 확인.
+- Override로 IDSW, TP/FP/FN 변화 재현 가능.
+- CORS 에러 및 500 NameError 재발 없음.
+
+## 📦 향후 개선 제안
+- 매칭 모드 토글 (Hungarian vs Greedy) 벤치마크.
+- 대형 시퀀스 스트림 성능 측정(WebSocket chunk latency).
+- Override diff 내역 Export 기능.
+

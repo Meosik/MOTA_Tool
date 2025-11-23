@@ -107,6 +107,17 @@ export default function TopBar() {
         </button>
       </div>
 
+      <div className="ml-4 flex items-center gap-3 text-xs">
+        {/* 색상 레전드 (MOTA 모드일 때만) */}
+        {mode === 'MOTA' && (
+          <>
+            <LegendItem label="GT"   color="rgba(80,220,120,0.95)" />
+            <LegendItem label="TP"   color="rgba(255,140,0,0.95)" />
+            <LegendItem label="FP"   color="rgba(255,0,80,0.95)" />
+            <LegendItem label="IDSW" color="rgba(120,0,255,0.95)" />
+          </>
+        )}
+      </div>
       <div className="flex-1" />
 
       {/* 우측: 편집 도구 및 내보내기(모드 관계 없이 항상 표시) */}
@@ -140,6 +151,15 @@ export default function TopBar() {
           <Download size={16} /> 내보내기
         </button>
       </div>
+    </div>
+  );
+}
+
+function LegendItem({ label, color }: { label:string; color:string }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="inline-block w-3 h-3 rounded-full" style={{ background: color }} />
+      <span className="text-[11px] font-medium" style={{ color }}>{label}</span>
     </div>
   );
 }

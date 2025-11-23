@@ -1,10 +1,11 @@
 
-export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
 
-export async function getJSON<T=any>(url: string): Promise<T>{
-  const r = await fetch(url)
-  if(!r.ok) throw new Error(await r.text())
-  return r.json()
+// Generic JSON fetch with optional RequestInit (for abort signals etc.)
+export async function getJSON<T = any>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
 }
 
 // 어노테이션 업로드 (MOT txt/json 파일)
@@ -19,8 +20,8 @@ export async function uploadAnnotation(kind: 'gt'|'pred', file: File){
 
 // 프레임 f의 박스들 조회 (정규화된 /tracks 응답을 납작하게)
 export type FlatBox = { id: number|string, bbox: [number,number,number,number], conf?: number };
-export async function fetchFrameBoxes(annotationId: string, f: number){
-  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f}&f1=${f}`);
+export async function fetchFrameBoxes(annotationId: string, f: number, opts?: { signal?: AbortSignal }) {
+  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f}&f1=${f}`, { signal: opts?.signal });
   const out: FlatBox[] = [];
   for (const tr of data.tracks || []) {
     for (const fr of tr.frames || []) {
@@ -35,7 +36,12 @@ export async function fetchFrameBoxes(annotationId: string, f: number){
 }
 
 // 프레임 범위 f0~f1의 모든 박스들 조회 (배치)
-export async function fetchTracksWindow(annotationId: string, f0: number, f1: number){
-  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f0}&f1=${f1}`);
+export async function fetchTracksWindow(annotationId: string, f0: number, f1: number, opts?: { signal?: AbortSignal }) {
+  const data = await getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks?annotation_id=${annotationId}&f0=${f0}&f1=${f1}`, { signal: opts?.signal });
   return data;
+}
+
+// 전체 트랙 일괄 로드 (대용량 주의)
+export async function fetchAllTracks(annotationId: string, opts?: { signal?: AbortSignal }) {
+  return getJSON<{tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]}>(`${API_BASE}/tracks/full?annotation_id=${annotationId}`, { signal: opts?.signal });
 }
