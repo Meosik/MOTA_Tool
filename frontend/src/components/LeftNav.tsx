@@ -125,7 +125,7 @@ export default function LeftPanel(){
         <button
           onClick={()=>{ scanServer(); }}
           className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-          title="서버(override 반영) 재스캔"
+          title="서버(override 반영) 스캔"
         >
           스캔
         </button>
