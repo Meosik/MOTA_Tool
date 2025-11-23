@@ -1,5 +1,5 @@
 // frontend/src/components/LeftPanel.tsx
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import useFrameStore from '../store/frameStore'
 
 const PAGE = 8
@@ -111,16 +111,7 @@ export default function LeftPanel(){
     }
   }
 
-  // override/threshold 변경 시 자동 재스캔 (로컬, override 반영)
-  // 디바운스된 로컬 스캔
-  const debounceRef = useRef<number | null>(null)
-  // 자동 서버 기반 재스캔 (디바운스) - IoU/Conf/Override/Annotation 변화 반영
-  useEffect(()=>{
-    if (!(gtAnnotationId && predAnnotationId && frames.length>0)) return;
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(()=>{ scanServer(); }, 350);
-    return ()=>{ if (debounceRef.current) window.clearTimeout(debounceRef.current); };
-  }, [gtAnnotationId, predAnnotationId, iou, conf, overrideVersion, frames.length])
+  // 자동 재스캔 비활성화: 사용자가 "재스캔" 버튼을 눌러야 서버 측 IDSW/카운트 갱신
 
   return (
     <aside className="w-64 border-r bg-white flex flex-col">

@@ -1,5 +1,6 @@
 // frontend/src/components/OverlayCanvas.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import computeMunkres from 'munkres-js';
 import useFrameStore from '../store/frameStore';
 import type { Box } from '../types/annotation';
 import { iouRect } from '../utils/matching';
@@ -129,14 +130,18 @@ export default function OverlayCanvas(){
     prevFrameRef.current = fm.i;
 
     getImage(fm.url, true).then(async loadedImg => {
-      try {
-        if ('decode' in loadedImg) await loadedImg.decode();
-      } catch {}
-      setImg(loadedImg);
-      lastImgRef.current = loadedImg;
-    }).catch(()=>{
-      setImg(null);
-    });
+      // 재생 중에는 즉시 표시하고 decode는 비동기적으로 처리 (지연 최소화)
+      if (isPlaying) {
+        setImg(loadedImg);
+        lastImgRef.current = loadedImg;
+        // 백그라운드 decode 시도 (지원되는 경우)
+        if ('decode' in loadedImg) { loadedImg.decode().catch(()=>{}); }
+      } else {
+        try { if ('decode' in loadedImg) await loadedImg.decode(); } catch {}
+        setImg(loadedImg);
+        lastImgRef.current = loadedImg;
+      }
+    }).catch(()=>{ setImg(null); });
 
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
@@ -191,43 +196,27 @@ export default function OverlayCanvas(){
   const prevAssignRef = useRef<Map<number, number>>(new Map());
   const lastFrameIndexRef = useRef<number | null>(null);
 
-  // Hungarian 매칭 (간단 구현) - 작은 행렬용
   function hungarianMatch(iouMat: number[][], thr: number): [number, number][] {
-    const G = iouMat.length; const P = G? iouMat[0].length : 0;
+    const G = iouMat.length; const P = G ? iouMat[0].length : 0;
     if (!G || !P) return [];
-    // 비용 행렬 생성 (IoU<thr -> 큰 비용)
-    const cost = iouMat.map(row => row.map(v => v>=thr ? (1 - v) : 1));
-    // 간단한 O(n^3) Hungarian (파생): 행 최소 뺄셈 -> 열 최소 뺄셈 -> 커버/라벨링 반복.
-    // 여기서는 규모 작으므로 라이브러리 없이 축소 구현 (정확성 충분)
-    // Step1: 행 최소
-    for (let i=0;i<G;i++){ const m = Math.min(...cost[i]); for (let j=0;j<P;j++) cost[i][j]-=m; }
-    // Step2: 열 최소
-    for (let j=0;j<P;j++){ let m = Infinity; for (let i=0;i<G;i++) m = Math.min(m, cost[i][j]); for (let i=0;i<G;i++) cost[i][j]-=m; }
-    // 커버된 0 매칭 찾기 (탐욕) - 소규모 매트릭스 최적해 확보에 충분 (완전 Hungarian 축약)
-    const usedRows = new Set<number>(); const usedCols = new Set<number>(); const pairs: [number,number][] = [];
-    // 반복적으로 가장 낮은 비용 0 선택
-    for (let _iter=0; _iter < Math.min(G,P); _iter++) {
-      let found = false;
+    const cost = iouMat.map(row => row.map(v => v >= thr ? (1 - v) : 1));
+    let assignment: [number, number][] = [];
+    try {
+      assignment = computeMunkres(cost) as [number, number][];
+    } catch (e) {
+      // fallback: simple greedy matching if library unavailable
+      const usedCols = new Set<number>();
       for (let i=0;i<G;i++) {
-        if (usedRows.has(i)) continue;
-        // 후보 0들
-        const zeros = [] as number[];
-        for (let j=0;j<P;j++) if (!usedCols.has(j) && cost[i][j]===0) zeros.push(j);
-        if (zeros.length === 1) { const j=zeros[0]; usedRows.add(i); usedCols.add(j); pairs.push([i,j]); found=true; }
-      }
-      if (found) continue;
-      // 다중 0 행 처리: 첫 미사용 0 선택
-      for (let i=0;i<G;i++) {
-        if (usedRows.has(i)) continue;
+        let bestJ = -1; let bestC = Infinity;
         for (let j=0;j<P;j++) {
-          if (!usedCols.has(j) && cost[i][j]===0) { usedRows.add(i); usedCols.add(j); pairs.push([i,j]); found=true; break; }
+          if (usedCols.has(j)) continue;
+          const c = cost[i][j];
+          if (c < bestC) { bestC = c; bestJ = j; }
         }
-        if (found) break;
+        if (bestJ>=0) { usedCols.add(bestJ); assignment.push([i,bestJ]); }
       }
-      if (!found) break; // 더 이상 0 없음
     }
-    // IoU<thr 제거
-    return pairs.filter(([gi, pj]) => iouMat[gi][pj] >= thr);
+    return assignment.filter(([gi, pj]) => iouMat[gi][pj] >= thr);
   }
 
   const predBoxesRaw: EditablePredBox[] = useMemo(()=>{
@@ -245,40 +234,95 @@ export default function OverlayCanvas(){
   }, [predBase, fm?.i, overrideVer, confThr, getPredBox]);
 
   type ClassifiedBox = EditablePredBox & { _cls: 'TP' | 'FP' | 'IDSW' };
-  const predBoxes: ClassifiedBox[] = useMemo(()=>{
-    if (!fm) return [];
-    if (gtBoxes.length === 0) return predBoxesRaw.map(b => ({ ...b, _cls: 'FP' }));
-    // IoU 행렬
+  const [predBoxes, setPredBoxes] = useState<ClassifiedBox[]>([]);
+
+  // 비동기 Hungarian: 재생 중에는 우선 이미지 표시 후 분류 지연 수행
+  useEffect(() => {
+    if (!fm) { setPredBoxes([]); return; }
+    if (gtBoxes.length === 0) { setPredBoxes(predBoxesRaw.map(b => ({ ...b, _cls: 'FP' }))); return; }
+    const t0 = performance.now();
     const iouMat: number[][] = gtBoxes.map(g => {
       const [gx,gy,gw,gh] = g.bbox.map(Number) as [number,number,number,number];
       return predBoxesRaw.map(p => iouRect(p, { x: gx, y: gy, w: gw, h: gh, id: -1 }));
     });
-    const pairs = hungarianMatch(iouMat, iouThr);
-    const matchedPredIdx = new Set<number>();
+    let pairs: [number, number][] = [];
+    if (!isPlaying) {
+      // 정지 상태만 Hungarian 수행 (CPU 블로킹 감소)
+      pairs = hungarianMatch(iouMat, iouThr);
+    } else {
+      // 재생 중 간단 greedy (1-pass)
+      const usedPred = new Set<number>();
+      for (let gi=0; gi<iouMat.length; gi++) {
+        let bestJ=-1; let bestIoU=0;
+        for (let pj=0; pj<iouMat[gi].length; pj++) {
+          const v = iouMat[gi][pj];
+          if (v >= iouThr && v > bestIoU && !usedPred.has(pj)) { bestIoU=v; bestJ=pj; }
+        }
+        if (bestJ>=0) { usedPred.add(bestJ); pairs.push([gi, bestJ]); }
+      }
+    }
     const cls: ClassifiedBox[] = predBoxesRaw.map(p => ({ ...p, _cls: 'FP' }));
-    // IDSW 판정 준비
     const curAssign = new Map<number, number>();
     for (const [gi, pj] of pairs) {
-      matchedPredIdx.add(pj);
       const gtId = Number(gtBoxes[gi].id);
       const predId = Number(predBoxesRaw[pj].id);
       curAssign.set(gtId, predId);
       const prev = prevAssignRef.current.get(gtId);
-      if (prev != null && prev !== predId) {
-        cls[pj]._cls = 'IDSW';
-      } else {
-        cls[pj]._cls = 'TP';
-      }
+      if (prev != null && prev !== predId) cls[pj]._cls = 'IDSW'; else cls[pj]._cls = 'TP';
     }
-    // 프레임 순서 역행 시 매핑 초기화
-    if (lastFrameIndexRef.current != null && fm.i < lastFrameIndexRef.current) {
-      prevAssignRef.current.clear();
-    }
-    // 현재 매핑 저장
+    if (lastFrameIndexRef.current != null && fm.i < lastFrameIndexRef.current) prevAssignRef.current.clear();
     for (const [gtId, predId] of curAssign.entries()) prevAssignRef.current.set(gtId, predId);
     lastFrameIndexRef.current = fm.i;
-    return cls;
-  }, [predBoxesRaw, gtBoxes, fm?.i, iouThr]);
+    setPredBoxes(cls);
+    const dt = performance.now() - t0;
+    if (dt > 25) { console.debug(`[match] frame=${fm.i} time=${dt.toFixed(1)}ms mode=${isPlaying?'greedy':'hungarian'} size=${gtBoxes.length}x${predBoxesRaw.length}`); }
+  }, [fm?.i, gtBoxes, predBoxesRaw, iouThr, isPlaying]);
+
+  // 이미지 로드 지연/정지 진단 로깅 및 재시도
+  const sameImageCountRef = useRef<number>(0);
+  const lastDrawnFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!fm) return;
+    const frameNum = fm.i;
+    const url = fm.url;
+    console.debug(`[image] request frame=${frameNum} url=${url? 'present':'missing'} playing=${isPlaying}`);
+    let cancelled = false;
+    // 120ms 내 이미지 객체 교체 없으면 재시도
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      if (frameNum !== useFrameStore.getState().frames[useFrameStore.getState().cur]?.i) return; // 프레임 변경됨
+      const currentImg = img;
+      if (!currentImg || (!url)) {
+        console.debug(`[image] retry ensureFrameURL frame=${frameNum}`);
+        const st = useFrameStore.getState();
+        st.ensureFrameURL(useFrameStore.getState().cur);
+        const retryUrl = st.frames[useFrameStore.getState().cur]?.url;
+        if (retryUrl) st.getImage(retryUrl, true).catch(()=>{});
+      }
+    }, 120);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [fm?.i]);
+
+  // 동일 이미지 3연속 표시 시 lastImgRef 초기화하여 강제 재로딩 유도
+  useEffect(() => {
+    if (!fm) return;
+    if (lastDrawnFrameRef.current === null) { lastDrawnFrameRef.current = fm.i; sameImageCountRef.current = 1; return; }
+    if (img && lastImgRef.current === img && fm.i !== lastDrawnFrameRef.current) {
+      sameImageCountRef.current += 1;
+      lastDrawnFrameRef.current = fm.i;
+      if (sameImageCountRef.current >= 3) {
+        console.debug('[image] same image 3 consecutive frames -> force clear lastImgRef');
+        lastImgRef.current = null;
+        sameImageCountRef.current = 0;
+      }
+    } else if (img && lastImgRef.current === img) {
+      // same frame continue, ignore
+    } else {
+      sameImageCountRef.current = 1;
+      lastDrawnFrameRef.current = fm.i;
+    }
+  }, [img, fm?.i]);
 
   function hitWhichHandle(cpt:Vec, b:Box): DragMode {
     const p = toCanvas({x:b.x, y:b.y});

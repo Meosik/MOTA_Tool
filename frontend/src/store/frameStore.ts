@@ -115,7 +115,8 @@ const THUMB_MAX = 300;
 const thumbLRU: number[] = [];
 
 // 동시 디코드 제한 (브라우저 리소스 오류 방지)
-const MAX_DECODE_CONCURRENCY = 4;
+// 동시 디코드 수: 4 -> 8 (프레임 정지 현상 완화 위한 증가)
+const MAX_DECODE_CONCURRENCY = 8;
 let activeDecodes = 0;
 type DecodeJob = { url:string; resolve:(img:HTMLImageElement)=>void; reject:(e:any)=>void; priority:boolean };
 const decodeQueue: DecodeJob[] = [];
@@ -335,8 +336,13 @@ const useFrameStore = create<State>((set, get) => ({
     if (N===0) return;
     const clamped = Math.max(0, Math.min(N-1, idx));
     set({ cur: clamped });
+    const debugFrame = get().frames[clamped];
+    console.debug(`[setCur] idx=${clamped} frameNumber=${debugFrame?.i} url=${debugFrame?.url ? 'yes' : 'no'}`);
     // 현재 + 주변만 URL 보장
     ensureObjectURLFor(clamped);
+    // 즉시 이미지 디코드/로딩 트리거 (재생 중 지연/stale 이미지 방지)
+    const urlNow = get().frames[clamped]?.url;
+    if (urlNow) { get().getImage(urlNow, true).catch(()=>{}); }
     // 재생 중이면 큰 반경(12), 아니면 적응형 (2~4)
     const playing = get().isPlaying;
     const baseRadius = Math.min(4, Math.max(2, getAdaptiveRadius()));
@@ -361,6 +367,13 @@ const useFrameStore = create<State>((set, get) => ({
     const protectHi = Math.min(N-1, clamped + radius*2);
     for (let i = protectLo; i <= protectHi; i++) {
       const u = get().frames[i]?.url; if (u) protectedURLs.add(u);
+    }
+    // 선행 프레임들 이미지 프리디코드 (재생 중일 때만)
+    if (playing) {
+      const preDecodeHi = Math.min(N-1, clamped + 6); // 6프레임 선행 버퍼
+      for (let i = clamped + 1; i <= preDecodeHi; i++) {
+        const u = get().frames[i]?.url; if (u) { get().getImage(u).catch(()=>{}); }
+      }
     }
     // 현재 프레임 박스가 없으면 즉시 단일 fetch (GT/PRED 각각)
     const fr = get().frames[clamped];
