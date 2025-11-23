@@ -79,11 +79,12 @@ export default function BottomHud() {
       const endIndex = Math.min(frames.length - 1, cur + 60) // Preload next 60 frames (2 seconds at 30fps)
       const totalToPreload = endIndex - startIndex + 1
 
-      // Preload images
+      // Preload images AND boxes
       for (let i = startIndex; i <= endIndex; i++) {
         const frame = frames[i]
         if (frame?.url) {
           try {
+            // Preload image
             const img = await getImage(frame.url)
             // Force decode
             if ('decode' in img) {
