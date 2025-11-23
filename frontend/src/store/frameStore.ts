@@ -1,6 +1,7 @@
 // frontend/src/store/frameStore.ts
 import { create } from 'zustand';
 import { fetchFrameBoxes, fetchTracksWindow, type FlatBox } from '../lib/api';
+import { fetchAllTracks } from '../lib/api';
 import type { Box } from '../types/annotation';
 
 export type Frame = { i:number; url?:string; file?:File };
@@ -40,6 +41,9 @@ type State = {
   // 이미지 캐시 (디코드된 Image)
   imgCache: Map<string, Promise<HTMLImageElement>>;
 
+  // 트랙 데이터 변경 버전 (박스 캐시 업데이트 감지용)
+  tracksVersion: number;
+
   // 액션
   setFrames: (frames: Frame[]) => void;
   setCur: (idx:number)=>void;
@@ -61,6 +65,8 @@ type State = {
   // 배치 캐시
   fillCacheWindow: (kind:'gt'|'pred', f0:number, f1:number)=>Promise<void>;
   getPredBox: (frame:number, id:number, base:Box)=>Box;
+  getFrameBoxes: (kind:'gt'|'pred', frame:number)=>FlatBox[];
+  preloadAllBoxes: ()=>Promise<void>;
 
   applyOverrideWithHistory:(frame:number, id:number, next:Box)=>void;
   changeOverrideIdWithHistory:(frame:number, oldId:number, newId:number, geom:Omit<Box,'id'>)=>void;
@@ -156,6 +162,15 @@ function schedulePrefetch(center:number, radius:number){
     const lo = Math.max(0, center - radius);
     const hi = Math.min(N-1, center + radius);
     for (let i=lo; i<=hi; i++) ensureObjectURLFor(i);
+    // 박스 프리패칭: 현재 창 범위의 프레임 index를 실제 프레임 번호(i 필드)로 매핑
+    const frames = st.frames;
+    if (frames.length && frames[lo] && frames[hi]) {
+      const f0 = frames[lo].i;
+      const f1 = frames[hi].i;
+      // GT / Pred 각각 비동기 윈도우 캐시 채우기 (이미 inFlight 중복 방지 존재)
+      if (st.gtAnnotationId) { st.fillCacheWindow('gt', f0, f1).catch(()=>{}); }
+      if (st.predAnnotationId) { st.fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+    }
   });
 }
 
@@ -185,6 +200,8 @@ const useFrameStore = create<State>((set, get) => ({
 
   imgCache: new Map(),
 
+  tracksVersion: 0,
+
   setFrames: (frames)=> set({ frames, cur: 0 }),
 
   setCur: (idx)=>{
@@ -194,7 +211,19 @@ const useFrameStore = create<State>((set, get) => ({
     set({ cur: clamped });
     // 현재 + 주변만 URL 보장
     ensureObjectURLFor(clamped);
-    schedulePrefetch(clamped, 2);
+    // 이미지와 박스 모두 더 넓은 범위 선로딩 (동적 반경 2~4)
+    const adaptiveRadius = Math.min(4, Math.max(2, getAdaptiveRadius()));
+    schedulePrefetch(clamped, adaptiveRadius);
+    // 추가로 더 먼 박스 프리패칭 (I/O 여유 시) - 이미지 아닌 박스만
+    const frames = get().frames;
+    const lo2 = Math.max(0, clamped - adaptiveRadius * 2);
+    const hi2 = Math.min(frames.length - 1, clamped + adaptiveRadius * 2);
+    if (frames[lo2] && frames[hi2]) {
+      const f0 = frames[lo2].i;
+      const f1 = frames[hi2].i;
+      if (get().gtAnnotationId) { get().fillCacheWindow('gt', f0, f1).catch(()=>{}); }
+      if (get().predAnnotationId) { get().fillCacheWindow('pred', f0, f1).catch(()=>{}); }
+    }
   },
 
   setPlaying: (v)=> set({ isPlaying: v }),
@@ -353,6 +382,7 @@ const useFrameStore = create<State>((set, get) => ({
     const p = (async()=>{
       const data = await fetchTracksWindow(ann, f0, f1);
       const target = (kind==='gt'? gtCache : prCache);
+      let added = 0;
       for (const tr of data.tracks || []) {
         for (const fr of tr.frames || []) {
           const k = `${ann}:${fr.f}`;
@@ -361,9 +391,11 @@ const useFrameStore = create<State>((set, get) => ({
             const fb: FlatBox = { id: tr.id, bbox: fr.bbox.map(Number) as any, ...(fr.conf!=null?{conf:Number(fr.conf)}:{}) };
             list.push(fb);
             target.set(k, list);
+            added++;
           }
         }
       }
+      if (added>0) set({ tracksVersion: get().tracksVersion + 1 });
     })().finally(()=> inFlight.delete(key));
     inFlight.set(key, p);
     return p;
@@ -372,6 +404,52 @@ const useFrameStore = create<State>((set, get) => ({
   getPredBox: (frame, id, base)=>{
     const ov = get().overrides.get(frame)?.get(id);
     return ov ? ov : base;
+  },
+
+  getFrameBoxes: (kind, frame)=>{
+    const ann = kind==='gt' ? get().gtAnnotationId : get().predAnnotationId;
+    if(!ann) return [];
+    const k = `${ann}:${frame}`;
+    const cache = kind==='gt' ? gtCache : prCache;
+    const hit = cache.get(k);
+    return hit ? hit.slice() : [];
+  },
+
+  preloadAllBoxes: async ()=>{
+    const gtId = get().gtAnnotationId;
+    const predId = get().predAnnotationId;
+    const frames = get().frames;
+    if (!frames.length) return;
+    let changed = 0;
+    // Helper to ingest full tracks
+    const ingest = (annId: string, kind: 'gt'|'pred', data: {tracks: {id:any, frames:{f:number, bbox:number[], conf?:number}[]}[]} ) => {
+      const target = kind==='gt' ? gtCache : prCache;
+      for (const tr of data.tracks || []) {
+        for (const fr of tr.frames || []) {
+          const k = `${annId}:${fr.f}`;
+          const list = target.get(k) || [];
+          if (!list.find(v => String(v.id)===String(tr.id))) {
+            const fb: FlatBox = { id: tr.id, bbox: fr.bbox.map(Number) as any, ...(fr.conf!=null?{conf:Number(fr.conf)}:{}) };
+            list.push(fb);
+            target.set(k, list);
+            changed++;
+          }
+        }
+      }
+    };
+    try {
+      if (gtId) {
+        const full = await fetchAllTracks(gtId);
+        ingest(gtId, 'gt', full);
+      }
+      if (predId) {
+        const full = await fetchAllTracks(predId);
+        ingest(predId, 'pred', full);
+      }
+      if (changed>0) set({ tracksVersion: get().tracksVersion + 1 });
+    } catch (e) {
+      console.warn('preloadAllBoxes 실패', e);
+    }
   },
 
   applyOverrideWithHistory: (frame, id, next)=>{

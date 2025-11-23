@@ -4,7 +4,7 @@ import useFrameStore from '../store/frameStore'
 import { ChevronLeft, ChevronRight, Play, Pause, Loader2 } from 'lucide-react'
 
 export default function BottomHud() {
-  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying, gtAnnotationId, predAnnotationId, getImage } = useFrameStore(s => ({
+  const { frames, cur, setCur, prefetchAround, isPlaying, setPlaying, gtAnnotationId, predAnnotationId, getImage, preloadAllBoxes } = useFrameStore(s => ({
     frames: s.frames,
     cur: s.cur,
     setCur: s.setCur,
@@ -14,6 +14,7 @@ export default function BottomHud() {
     gtAnnotationId: s.gtAnnotationId,
     predAnnotationId: s.predAnnotationId,
     getImage: s.getImage,
+    preloadAllBoxes: s.preloadAllBoxes,
   }))
 
   const [fps, setFps] = useState(30)
@@ -79,6 +80,10 @@ export default function BottomHud() {
       const endIndex = Math.min(frames.length - 1, cur + 60) // Preload next 60 frames (2 seconds at 30fps)
       const totalToPreload = endIndex - startIndex + 1
 
+      // 1) 박스 전체 선로딩 (GT / Pred) - 한 번만 호출
+      //    큰 파일일 경우 초기 지연 발생 가능, 필요시 UI 옵션으로 전환 가능
+      await preloadAllBoxes().catch(()=>{})
+
       // Preload images AND boxes
       for (let i = startIndex; i <= endIndex; i++) {
         const frame = frames[i]
@@ -106,7 +111,7 @@ export default function BottomHud() {
       setIsPreloading(false)
       console.error('Preload error:', error)
     }
-  }, [isPlaying, frames, cur, getImage, setPlaying])
+  }, [isPlaying, frames, cur, getImage, setPlaying, preloadAllBoxes])
 
   const togglePlay = useCallback(() => {
     if (isPlaying) {

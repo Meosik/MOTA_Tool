@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useFrameStore from '../store/frameStore';
 import type { Box } from '../types/annotation';
 import { iouRect } from '../utils/matching';
-import { fetchFrameBoxes, type FlatBox } from '../lib/api';
+import { type FlatBox } from '../lib/api';
 
 const COLORS = {
   gtStroke: 'rgba(80, 220, 120, 0.95)',
@@ -23,7 +23,7 @@ function clamp(v:number, a:number, b:number){ return Math.max(a, Math.min(b, v))
 function rectContains(x:number, y:number, r:{x:number;y:number;w:number;h:number}) {
   return x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h;
 }
-function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number) {
+function roundRect(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number) {
   const rr = Math.min(r, w/2, h/2);
   ctx.beginPath();
   ctx.moveTo(x+rr, y);
@@ -33,7 +33,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, 
   ctx.arcTo(x,   y,   x+w, y,   rr);
   ctx.closePath();
 }
-function drawIdLabel(ctx: CanvasRenderingContext2D, text: string, px: number, py: number, bgColor: string) {
+function drawIdLabel(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, text: string, px: number, py: number, bgColor: string) {
   const padX = 4, padY = 2, radius = 3;
   ctx.save();
   ctx.font = '12px ui-sans-serif, system-ui, -apple-system';
@@ -62,6 +62,8 @@ export default function OverlayCanvas(){
   const gtId           = useFrameStore(s => s.gtAnnotationId);
   const predId         = useFrameStore(s => s.predAnnotationId);
   const getPredBox     = useFrameStore(s => s.getPredBox);
+  const getFrameBoxes  = useFrameStore(s => s.getFrameBoxes);
+  const tracksVersion  = useFrameStore(s => s.tracksVersion);
   const overrideVer    = useFrameStore(s => s.overrideVersion);
 
   const showGT         = useFrameStore(s => s.showGT);
@@ -125,33 +127,25 @@ export default function OverlayCanvas(){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fm?.url]);
 
+  // GT 박스 로딩 (AbortController 적용)
+  // GT 박스: 캐시 기반 즉시 제공 (tracksVersion 변경 시 갱신)
   useEffect(()=>{
-    let aborted = false;
-    (async ()=>{
-      if (gtId && fm) {
-        try { 
-          const bb = await fetchFrameBoxes(gtId, fm.i); 
-          if (!aborted) setGtBoxes(bb);
-        }
-        catch { if(!aborted) setGtBoxes([]); }
-      } else setGtBoxes([]);
-    })();
-    return ()=>{aborted = true;}
-  }, [gtId, fm?.i]);
+    if (gtId && fm) {
+      setGtBoxes(getFrameBoxes('gt', fm.i));
+    } else {
+      setGtBoxes([]);
+    }
+  }, [gtId, fm?.i, tracksVersion, getFrameBoxes]);
 
+  // Pred 박스 로딩 (AbortController 적용)
+  // Pred 박스: 캐시 기반 즉시 제공
   useEffect(()=>{
-    let aborted = false;
-    (async ()=>{
-      if (predId && fm) {
-        try { 
-          const bb = await fetchFrameBoxes(predId, fm.i); 
-          if (!aborted) setPredBase(bb);
-        }
-        catch { if(!aborted) setPredBase([]); }
-      } else setPredBase([]);
-    })();
-    return ()=>{aborted = true;}
-  }, [predId, fm?.i]);
+    if (predId && fm) {
+      setPredBase(getFrameBoxes('pred', fm.i));
+    } else {
+      setPredBase([]);
+    }
+  }, [predId, fm?.i, tracksVersion, getFrameBoxes]);
 
   useEffect(()=>{
     setActiveId(null);
@@ -211,7 +205,7 @@ export default function OverlayCanvas(){
 
   // Memoize drawing functions for better performance
   const drawBoxes = useCallback((
-    ctx: CanvasRenderingContext2D,
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     boxes: (FlatBox | Box)[],
     isGT: boolean,
     scale: number,
@@ -252,7 +246,7 @@ export default function OverlayCanvas(){
   }, []);
 
   const drawPredHandles = useCallback((
-    ctx: CanvasRenderingContext2D,
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     boxes: Box[],
     activeId: number | null,
     ghostBox: Box | null,
@@ -297,13 +291,13 @@ export default function OverlayCanvas(){
     let rafId: number | null = null;
     let needsRender = true;
 
-    // Generate cache key for current frame state
+    // Generate cache key for current frame state (include geometry + overrideVersion)
     const getCacheKey = () => {
       const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
-      // Include box IDs to ensure cache is specific to actual box content
-      const gtKey = gtBoxes.map(b => `${b.id}`).join(',');
-      const predKey = predBoxes.map(b => `${b.id}`).join(',');
-      return `${fm?.i ?? 'none'}-gt[${gtKey}]-pr[${predKey}]-${showGT}-${showPred}-${boxKey}`;
+      // Include ID + geometry to avoid reusing stale bitmaps when boxes move but IDs stay
+      const gtKey = gtBoxes.map(b => `${b.id}:${b.bbox.join(',')}`).join(';');
+      const predKey = predBoxes.map(b => `${b.id}:${b.x ?? (b as any).bbox?.[0]},${b.y ?? (b as any).bbox?.[1]},${b.w ?? (b as any).bbox?.[2]},${b.h ?? (b as any).bbox?.[3]}`).join(';');
+      return `${fm?.i ?? 'none'}-gt[${gtKey}]-pr[${predKey}]-ovr[${overrideVer}]-${showGT}-${showPred}-${boxKey}`;
     };
 
     // Render to OffscreenCanvas (or fallback to regular canvas) to avoid blocking main thread
@@ -405,12 +399,15 @@ export default function OverlayCanvas(){
           
           // Limit cache size
           if (frameCache.current.size > MAX_CACHED_FRAMES) {
-            const firstKey = frameCache.current.keys().next().value;
-            const oldBitmap = frameCache.current.get(firstKey);
-            if (oldBitmap && 'close' in oldBitmap) {
-              (oldBitmap as ImageBitmap).close();
+            const iterator = frameCache.current.keys();
+            const firstKey = iterator.next().value as string | undefined;
+            if (typeof firstKey === 'string') {
+              const oldBitmap = frameCache.current.get(firstKey);
+              if (oldBitmap && 'close' in oldBitmap) {
+                (oldBitmap as ImageBitmap).close();
+              }
+              frameCache.current.delete(firstKey);
             }
-            frameCache.current.delete(firstKey);
           }
         } catch (e) {
           // Bitmap creation not supported, skip caching
@@ -435,7 +432,17 @@ export default function OverlayCanvas(){
         cancelAnimationFrame(rafId);
       }
     };
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm])
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm, overrideVer])
+
+  // Clear frame cache when frame index changes to avoid any stale geometry usage
+  useEffect(() => {
+    // When moving to a new frame, ensure no stale cached bitmap is reused for similar ID sets
+    frameCache.current.clear();
+    setActiveId(null);
+    setDragMode('none');
+    setGhostBox(null);
+    dragAnchor.current = null;
+  }, [fm?.i]);
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
