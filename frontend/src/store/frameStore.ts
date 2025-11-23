@@ -65,7 +65,7 @@ type State = {
   setIou: (v:number)=>void;
   setConf: (v:number)=>void;
 
-  getImage: (url:string)=>Promise<HTMLImageElement>;
+  getImage: (url:string, priority?:boolean)=>Promise<HTMLImageElement>;
   prefetchAround: (center:number, radius?:number)=>void;
 
   // 배치 캐시
@@ -79,6 +79,7 @@ type State = {
   ensureFrameURL: (index:number)=>void;
   getThumbnail: (frame:number)=>string|undefined;
   requestThumbnail: (frame:number)=>void;
+  fetchSingleFrameBoxes: (kind:'gt'|'pred', frame:number)=>Promise<void>;
 
   applyOverrideWithHistory:(frame:number, id:number, next:Box)=>void;
   changeOverrideIdWithHistory:(frame:number, oldId:number, newId:number, geom:Omit<Box,'id'>)=>void;
@@ -116,14 +117,17 @@ const thumbLRU: number[] = [];
 // 동시 디코드 제한 (브라우저 리소스 오류 방지)
 const MAX_DECODE_CONCURRENCY = 4;
 let activeDecodes = 0;
-type DecodeJob = { url:string; resolve:(img:HTMLImageElement)=>void; reject:(e:any)=>void };
+type DecodeJob = { url:string; resolve:(img:HTMLImageElement)=>void; reject:(e:any)=>void; priority:boolean };
 const decodeQueue: DecodeJob[] = [];
 // 디코드 중인 URL은 축출 대상에서 제외하여 ERR_FILE_NOT_FOUND 방지
 const decodingURLs = new Set<string>();
 
 function processDecodeQueue(){
   while (activeDecodes < MAX_DECODE_CONCURRENCY && decodeQueue.length){
-    const job = decodeQueue.shift()!;
+    // 우선순위 높은 작업 먼저 선택
+    let priIdx = decodeQueue.findIndex(j => j.priority);
+    if (priIdx < 0) priIdx = 0;
+    const job = decodeQueue.splice(priIdx,1)[0];
     activeDecodes++;
     const img = new Image();
     // @ts-ignore
@@ -167,6 +171,14 @@ function touchURL(url:string){
         useFrameStore.setState({ frames });
       }
       urlOwner.delete(old);
+    }
+    // 디코드 큐에 남아있는 해당 URL 작업 제거하여 ERR_FILE_NOT_FOUND 방지
+    for (let q = decodeQueue.length - 1; q >= 0; q--) {
+      if (decodeQueue[q].url === old) {
+        const job = decodeQueue[q];
+        decodeQueue.splice(q,1);
+        try { job.reject(new Error('revoked')); } catch {}
+      }
     }
     try { URL.revokeObjectURL(old); } catch {}
   }
@@ -556,7 +568,7 @@ const useFrameStore = create<State>((set, get) => ({
   setIou: (v)=> set({ iou: Math.max(0, Math.min(1, v)) }),
   setConf: (v)=> set({ conf: Math.max(0, Math.min(1, v)) }),
 
-  getImage: async(url:string)=>{
+  getImage: async(url:string, priority=false)=>{
     const cache = get().imgCache;
     const hit = cache.get(url);
     if (hit) {
@@ -566,7 +578,10 @@ const useFrameStore = create<State>((set, get) => ({
     }
     // 동시 디코드 제한 큐 적용
     const p = new Promise<HTMLImageElement>((resolve,reject)=>{
-      decodeQueue.push({ url, resolve, reject });
+      // priority true면 앞쪽 삽입
+      if (priority) decodeQueue.unshift({ url, resolve, reject, priority });
+      else decodeQueue.push({ url, resolve, reject, priority });
+      decodingURLs.add(url);
       processDecodeQueue();
     });
     cache.set(url, p);
@@ -788,6 +803,33 @@ const useFrameStore = create<State>((set, get) => ({
         }
       } catch {}
     }).catch(()=>{});
+  },
+
+  fetchSingleFrameBoxes: async(kind, frameNum) => {
+    const ann = kind==='gt' ? get().gtAnnotationId : get().predAnnotationId;
+    if (!ann) return;
+    const key = `${kind}:${ann}:${frameNum}-${frameNum}`;
+    if (inFlight.has(key)) return inFlight.get(key)!;
+    const p = (async()=>{
+      try {
+        const data = await fetchTracksWindow(ann, frameNum, frameNum);
+        const target = kind==='gt' ? gtCache : prCache;
+        let added = 0;
+        for (const tr of data.tracks || []){
+          for (const frd of tr.frames || []){
+            const k = `${ann}:${frd.f}`;
+            const list = target.get(k) || [];
+            if (!list.find(v => String(v.id)===String(tr.id))){
+              const fb: FlatBox = { id: tr.id, bbox: frd.bbox.map(Number) as any, ...(frd.conf!=null?{conf:Number(frd.conf)}:{}) };
+              list.push(fb); target.set(k, list); added++;
+            }
+          }
+        }
+        set({ tracksVersion: get().tracksVersion + 1 });
+      } catch {}
+    })().finally(()=> inFlight.delete(key));
+    inFlight.set(key, p);
+    return p;
   },
 
   applyOverrideWithHistory: (frame, id, next)=>{

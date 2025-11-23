@@ -76,6 +76,9 @@ export default function OverlayCanvas(){
   const [img, setImg] = useState<HTMLImageElement|null>(null);
   // 최근 성공적으로 디코드된 이미지 -> 다음 프레임 이미지 준비 안 되었을 때 깜빡임 최소화
   const lastImgRef = useRef<HTMLImageElement|null>(null);
+  // 마지막으로 렌더한 프레임 번호 저장 (큰 점프 감지용)
+  const prevFrameRef = useRef<number | null>(null);
+  const isPlaying = useFrameStore(s => s.isPlaying);
   const fm = useMemo(() => frames[cur] || null, [frames, cur]);
   
   // Frame cache for rendered canvases (using OffscreenCanvas when available)
@@ -106,30 +109,50 @@ export default function OverlayCanvas(){
   const toCanvas = (p:Vec) => ({ x: layout.ox + p.x*layout.s, y: layout.oy + p.y*layout.s });
   const fromCanvas = (p:Vec) => ({ x: (p.x - layout.ox)/layout.s, y: (p.y - layout.oy)/layout.s });
 
-  useEffect(()=>{
-    if (!fm) { setImg(null); return; }
-    if (!fm.url) { setImg(null); return; }
-    
-    // Ensure image is fully decoded before setting
-    getImage(fm.url).then(async (loadedImg) => {
+  useEffect(() => {
+    if (!fm || !fm.url) {
+      setImg(null);
+      return;
+    }
+    const prev = prevFrameRef.current;
+    const diff = prev != null ? Math.abs(fm.i - prev) : 0;
+    // 큰 점프(>5) 또는 재생 종료 후 점프 시 이전 이미지 사용 금지
+    const largeJump = diff > 5 && !isPlaying;
+    if (largeJump) {
+      lastImgRef.current = null; // 깨끗한 전환 (오래된 이미지 잔존 방지)
+      setImg(null); // 이전 이미지 즉시 비움
+    }
+    prevFrameRef.current = fm.i;
+
+    getImage(fm.url, true).then(async loadedImg => {
       try {
-        // Force decode to happen now instead of during draw
-        if ('decode' in loadedImg) {
-          await loadedImg.decode();
-        }
-        setImg(loadedImg);
-        lastImgRef.current = loadedImg; // 최신 이미지 보관
-      } catch {
-        setImg(loadedImg); // Fallback if decode fails
-        lastImgRef.current = loadedImg;
-      }
-    }).catch(()=>setImg(null));
-    
+        if ('decode' in loadedImg) await loadedImg.decode();
+      } catch {}
+      setImg(loadedImg);
+      lastImgRef.current = loadedImg;
+    }).catch(()=>{
+      setImg(null);
+    });
+
     prefetchAround(cur, 3);
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
-    setIdEdit(v=> ({...v, show:false}))
+    setIdEdit(v=> ({...v, show:false}));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fm?.url]);
+  }, [fm?.url, isPlaying]);
+
+  // 첫 프레임 박스가 비어 있으면 즉시 재조회 (GT/PRED 각각 1회)
+  useEffect(()=>{
+    if (!fm) return;
+    const frameNum = fm.i;
+    if (frameNum !== 1) return; // 첫 프레임 한정
+    const st = useFrameStore.getState();
+    if (st.gtAnnotationId && st.getFrameBoxes('gt', frameNum).length === 0){
+      st.fetchSingleFrameBoxes('gt', frameNum).catch(()=>{});
+    }
+    if (st.predAnnotationId && st.getFrameBoxes('pred', frameNum).length === 0){
+      st.fetchSingleFrameBoxes('pred', frameNum).catch(()=>{});
+    }
+  }, [fm?.i, gtId, predId]);
 
   // GT 박스 로딩 (AbortController 적용)
   // GT 박스: 캐시 기반 즉시 제공 (tracksVersion 변경 시 갱신)

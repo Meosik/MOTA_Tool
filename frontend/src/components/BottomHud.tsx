@@ -71,7 +71,7 @@ export default function BottomHud() {
       setCur(targetIndex)
       prefetchAround(targetIndex, 5)
       const url = st.frames[targetIndex].url
-      if (url) { st.getImage(url).catch(()=>{}) }
+      if (url) { st.getImage(url, true).catch(()=>{}) } // 점프 프레임 우선 디코드
     }
     cancelEdit()
   }, [editValue, frames, setCur, prefetchAround, cancelEdit])
