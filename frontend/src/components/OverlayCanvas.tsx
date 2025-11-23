@@ -192,9 +192,6 @@ export default function OverlayCanvas(){
   }, [overrideVer]);
 
   type EditablePredBox = Box & { _origId:number };
-  // 이전 프레임 GT -> Pred 매핑 (IDSW 감지용)
-  const prevAssignRef = useRef<Map<number, number>>(new Map());
-  const lastFrameIndexRef = useRef<number | null>(null);
 
   function hungarianMatch(iouMat: number[][], thr: number): [number, number][] {
     const G = iouMat.length; const P = G ? iouMat[0].length : 0;
@@ -204,7 +201,6 @@ export default function OverlayCanvas(){
     try {
       assignment = computeMunkres(cost) as [number, number][];
     } catch (e) {
-      // fallback: simple greedy matching if library unavailable
       const usedCols = new Set<number>();
       for (let i=0;i<G;i++) {
         let bestJ = -1; let bestC = Infinity;
@@ -219,7 +215,7 @@ export default function OverlayCanvas(){
     return assignment.filter(([gi, pj]) => iouMat[gi][pj] >= thr);
   }
 
-  const predBoxesRaw: EditablePredBox[] = useMemo(()=>{
+  const predBoxesRaw: EditablePredBox[] = useMemo(() => {
     if (!fm) return [];
     const out: EditablePredBox[] = [];
     for (const p of predBase) {
@@ -227,7 +223,7 @@ export default function OverlayCanvas(){
       const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
       const origId = Number(base.id);
       const b = getPredBox(fm.i, origId, base);
-      if ((b.conf ?? 1) < confThr) continue; // conf 필터만 적용 (IoU는 색상 분류에 사용)
+      if ((b.conf ?? 1) < confThr) continue;
       out.push({ ...b, _origId: origId });
     }
     return out;
@@ -236,21 +232,64 @@ export default function OverlayCanvas(){
   type ClassifiedBox = EditablePredBox & { _cls: 'TP' | 'FP' | 'IDSW' };
   const [predBoxes, setPredBoxes] = useState<ClassifiedBox[]>([]);
 
-  // 비동기 Hungarian: 재생 중에는 우선 이미지 표시 후 분류 지연 수행
   useEffect(() => {
     if (!fm) { setPredBoxes([]); return; }
     if (gtBoxes.length === 0) { setPredBoxes(predBoxesRaw.map(b => ({ ...b, _cls: 'FP' }))); return; }
     const t0 = performance.now();
+
+    // 이전 프레임 매칭 재계산 (경로 독립)
+    let prevAssign: Map<number, number> = new Map();
+    if (fm.i > 1) {
+      const prevFrame = frames.find(fr => fr.i === fm.i - 1) || null;
+      if (prevFrame) {
+        const prevGt = getFrameBoxes('gt', prevFrame.i);
+        const prevPredFlat = getFrameBoxes('pred', prevFrame.i);
+        if (prevGt.length && prevPredFlat.length) {
+          const prevPredBoxes: EditablePredBox[] = [];
+          for (const p of prevPredFlat) {
+            const [px,py,pw,ph] = p.bbox.map(Number) as [number,number,number,number];
+            const base: Box = { id: Number(p.id), x:px, y:py, w:pw, h:ph, conf: (p as any).conf ?? 1.0 };
+            const origId = Number(base.id);
+            const b = getPredBox(prevFrame.i, origId, base);
+            if ((b.conf ?? 1) < confThr) continue;
+            prevPredBoxes.push({ ...b, _origId: origId });
+          }
+          if (prevPredBoxes.length) {
+            const prevIouMat = prevGt.map(g => {
+              const [gx,gy,gw,gh] = g.bbox.map(Number) as [number,number,number,number];
+              return prevPredBoxes.map(p => iouRect(p, { x: gx, y: gy, w: gw, h: gh, id: -1 }));
+            });
+            let prevPairs: [number, number][] = [];
+            if (!isPlaying) prevPairs = hungarianMatch(prevIouMat, iouThr); else {
+              const usedPrev = new Set<number>();
+              for (let gi=0; gi<prevIouMat.length; gi++) {
+                let bestJ=-1; let bestIoU=0;
+                for (let pj=0; pj<prevIouMat[gi].length; pj++) {
+                  const v = prevIouMat[gi][pj];
+                  if (v >= iouThr && v > bestIoU && !usedPrev.has(pj)) { bestIoU=v; bestJ=pj; }
+                }
+                if (bestJ>=0) { usedPrev.add(bestJ); prevPairs.push([gi, bestJ]); }
+              }
+            }
+            for (const [gi,pj] of prevPairs) {
+              const gtId = Number(prevGt[gi].id);
+              const predId = Number(prevPredBoxes[pj].id);
+              prevAssign.set(gtId, predId);
+            }
+          }
+        }
+      }
+    }
+
+    // 현재 프레임 매칭
     const iouMat: number[][] = gtBoxes.map(g => {
       const [gx,gy,gw,gh] = g.bbox.map(Number) as [number,number,number,number];
       return predBoxesRaw.map(p => iouRect(p, { x: gx, y: gy, w: gw, h: gh, id: -1 }));
     });
     let pairs: [number, number][] = [];
     if (!isPlaying) {
-      // 정지 상태만 Hungarian 수행 (CPU 블로킹 감소)
       pairs = hungarianMatch(iouMat, iouThr);
     } else {
-      // 재생 중 간단 greedy (1-pass)
       const usedPred = new Set<number>();
       for (let gi=0; gi<iouMat.length; gi++) {
         let bestJ=-1; let bestIoU=0;
@@ -261,37 +300,32 @@ export default function OverlayCanvas(){
         if (bestJ>=0) { usedPred.add(bestJ); pairs.push([gi, bestJ]); }
       }
     }
+
+    // 분류 결정
     const cls: ClassifiedBox[] = predBoxesRaw.map(p => ({ ...p, _cls: 'FP' }));
-    const curAssign = new Map<number, number>();
     for (const [gi, pj] of pairs) {
       const gtId = Number(gtBoxes[gi].id);
       const predId = Number(predBoxesRaw[pj].id);
-      curAssign.set(gtId, predId);
-      const prev = prevAssignRef.current.get(gtId);
-      if (prev != null && prev !== predId) cls[pj]._cls = 'IDSW'; else cls[pj]._cls = 'TP';
+      const prevPredId = prevAssign.get(gtId);
+      if (prevPredId != null && prevPredId !== predId) cls[pj]._cls = 'IDSW'; else cls[pj]._cls = 'TP';
     }
-    if (lastFrameIndexRef.current != null && fm.i < lastFrameIndexRef.current) prevAssignRef.current.clear();
-    for (const [gtId, predId] of curAssign.entries()) prevAssignRef.current.set(gtId, predId);
-    lastFrameIndexRef.current = fm.i;
     setPredBoxes(cls);
     const dt = performance.now() - t0;
-    if (dt > 25) { console.debug(`[match] frame=${fm.i} time=${dt.toFixed(1)}ms mode=${isPlaying?'greedy':'hungarian'} size=${gtBoxes.length}x${predBoxesRaw.length}`); }
-  }, [fm?.i, gtBoxes, predBoxesRaw, iouThr, isPlaying]);
+    if (dt > 25) console.debug(`[match] frame=${fm.i} time=${dt.toFixed(1)}ms size=${gtBoxes.length}x${predBoxesRaw.length}`);
+  }, [fm?.i, frames, gtBoxes, predBoxesRaw, iouThr, isPlaying, overrideVer, confThr, getFrameBoxes, getPredBox]);
 
   // 이미지 로드 지연/정지 진단 로깅 및 재시도
   const sameImageCountRef = useRef<number>(0);
   const lastDrawnFrameRef = useRef<number | null>(null);
-
   useEffect(() => {
     if (!fm) return;
     const frameNum = fm.i;
     const url = fm.url;
     console.debug(`[image] request frame=${frameNum} url=${url? 'present':'missing'} playing=${isPlaying}`);
     let cancelled = false;
-    // 120ms 내 이미지 객체 교체 없으면 재시도
     const t = setTimeout(() => {
       if (cancelled) return;
-      if (frameNum !== useFrameStore.getState().frames[useFrameStore.getState().cur]?.i) return; // 프레임 변경됨
+      if (frameNum !== useFrameStore.getState().frames[useFrameStore.getState().cur]?.i) return;
       const currentImg = img;
       if (!currentImg || (!url)) {
         console.debug(`[image] retry ensureFrameURL frame=${frameNum}`);
@@ -400,34 +434,33 @@ export default function OverlayCanvas(){
     scale: number,
     offset: { ox: number; oy: number }
   ) => {
-    // 핸들 기본 색상: TP 색상 사용
-    ctx.fillStyle = COLORS.tpStroke;
-    
     for (const b of boxes) {
-      const isActive = activeId === b.id && ghostBox;
-      const rb = isActive ? ghostBox! : b;
+      if (activeId!=null && b.id!==activeId) continue;
+      const rb = ghostBox && activeId===b.id ? ghostBox : b;
+      // 분류 색상과 일치
+      let handleColor = COLORS.tpStroke;
+      const found = predBoxes.find(pb => pb.id === b.id);
+      if (found) {
+        if (found._cls === 'IDSW') handleColor = COLORS.idswStroke;
+        else if (found._cls === 'FP') handleColor = COLORS.fpStroke;
+        else handleColor = COLORS.tpStroke;
+      }
+      ctx.fillStyle = handleColor;
       const px = offset.ox + rb.x * scale;
       const py = offset.oy + rb.y * scale;
       const cw = rb.w * scale;
       const ch = rb.h * scale;
-
       const handles = [
         { x: px, y: py },
         { x: px + cw, y: py },
         { x: px, y: py + ch },
         { x: px + cw, y: py + ch },
       ];
-
       for (const h of handles) {
-        ctx.fillRect(
-          h.x - HANDLE_SIZE / 2,
-          h.y - HANDLE_SIZE / 2,
-          HANDLE_SIZE,
-          HANDLE_SIZE
-        );
+        ctx.fillRect(h.x - HANDLE_SIZE/2, h.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
       }
     }
-  }, []);
+  }, [predBoxes, ghostBox, activeId]);
 
   // draw - optimized with RAF throttling, OffscreenCanvas, and frame caching
   useEffect(() => {
@@ -439,13 +472,12 @@ export default function OverlayCanvas(){
     let rafId: number | null = null;
     let needsRender = true;
 
-    // Generate cache key for current frame state (include geometry + overrideVersion)
+    // Generate cache key includes geometry + overrideVersion + classification + iouThr
     const getCacheKey = () => {
       const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
-      // Include ID + geometry to avoid reusing stale bitmaps when boxes move but IDs stay
       const gtKey = gtBoxes.map(b => `${b.id}:${b.bbox.join(',')}`).join(';');
-      const predKey = predBoxes.map(b => `${b.id}:${b.x ?? (b as any).bbox?.[0]},${b.y ?? (b as any).bbox?.[1]},${b.w ?? (b as any).bbox?.[2]},${b.h ?? (b as any).bbox?.[3]}`).join(';');
-      return `${fm?.i ?? 'none'}-gt[${gtKey}]-pr[${predKey}]-ovr[${overrideVer}]-${showGT}-${showPred}-${boxKey}`;
+      const predKey = predBoxes.map(b => `${b.id}:${(b as any).x ?? (b as any).bbox?.[0]},${(b as any).y ?? (b as any).bbox?.[1]},${(b as any).w ?? (b as any).bbox?.[2]},${(b as any).h ?? (b as any).bbox?.[3]},${(b as any)._cls || 'NA'}`).join(';');
+      return `${fm?.i ?? 'none'}-gt[${gtKey}]-pr[${predKey}]-ovr[${overrideVer}]-iou[${iouThr}]-${showGT}-${showPred}-${boxKey}`;
     };
 
     // Render to OffscreenCanvas (or fallback to regular canvas) to avoid blocking main thread
@@ -581,17 +613,12 @@ export default function OverlayCanvas(){
         cancelAnimationFrame(rafId);
       }
     };
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm, overrideVer])
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm, overrideVer, iouThr])
 
-  // Clear frame cache when frame index changes to avoid any stale geometry usage
+  // Clear frame cache when frame index or classification parameters change
   useEffect(() => {
-    // When moving to a new frame, ensure no stale cached bitmap is reused for similar ID sets
     frameCache.current.clear();
-    setActiveId(null);
-    setDragMode('none');
-    setGhostBox(null);
-    dragAnchor.current = null;
-  }, [fm?.i]);
+  }, [fm?.i, iouThr, overrideVer]);
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
@@ -617,28 +644,25 @@ export default function OverlayCanvas(){
 
   // ID 더블클릭 편집
   const onDoubleClick = (e:React.MouseEvent<HTMLCanvasElement>) => {
-    const frame = frames[cur]; if (!frame || !showPred) return
-    const ptC = getCanvasPt(e)
-    const hit = hitPredBox(ptC)
-    if (!hit) return
-
-    setActiveId(Number(hit.id))
-    setDragMode('none'); setGhostBox(null); dragAnchor.current = null
-
-    const p = toCanvas({x: hit.x, y: hit.y})
-    const left = p.x + 4
-    const top  = Math.max(0, p.y - 20)
-
+    const frame = frames[cur]; if (!frame || !showPred) return;
+    const ptC = getCanvasPt(e);
+    const hit = hitPredBox(ptC);
+    if (!hit) return;
+    setActiveId(Number(hit.id));
+    setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
+    const p = toCanvas({x: hit.x, y: hit.y});
+    const left = p.x + 4;
+    const top  = Math.max(0, p.y - 20);
     setIdEdit({
       show: true,
       frame: frame.i,
-      targetId: Number(hit.id), // 현재 표시되는 id
-      baseId: (hit as any)._origId ?? Number(hit.id), // 원본 트랙 id (override 키)
+      targetId: Number(hit.id),
+      baseId: (hit as any)._origId ?? Number(hit.id),
       value: String(hit.id),
       left, top,
-      geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf },
-    })
-  }
+      geom: { x: hit.x, y: hit.y, w: hit.w, h: hit.h, conf: hit.conf }
+    });
+  };
 
   const commitIdEdit = () => {
     if (!idEdit.show) return
@@ -668,9 +692,10 @@ export default function OverlayCanvas(){
     setIdEdit(v=>({...v, show:false}))
   }
 
+  // Hover 시 커서 업데이트
   const updateHoverCursor = (ptC:Vec) => {
     const el = cnvRef.current; if (!el) return;
-    if (dragMode !== 'none') return;
+    if (dragMode !== 'none') return; // 드래그 중에는 모드별 커서가 이미 설정됨
     const hit = hitPredBox(ptC);
     if (hit) {
       const h = hitWhichHandle(ptC, hit);
