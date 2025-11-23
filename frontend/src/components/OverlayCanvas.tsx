@@ -134,7 +134,7 @@ export default function OverlayCanvas(){
       } else setGtBoxes([]);
     })();
     return ()=>{aborted = true;}
-  }, [gtId, fm]);
+  }, [gtId, fm?.i]);
 
   useEffect(()=>{
     let aborted = false;
@@ -145,7 +145,7 @@ export default function OverlayCanvas(){
       } else setPredBase([]);
     })();
     return ()=>{aborted = true;}
-  }, [predId, fm]);
+  }, [predId, fm?.i]);
 
   useEffect(()=>{
     setActiveId(null);
