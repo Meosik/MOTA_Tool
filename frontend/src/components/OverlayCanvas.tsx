@@ -115,9 +115,18 @@ export default function OverlayCanvas(){
   const fromCanvas = (p:Vec) => ({ x: (p.x - layout.ox)/layout.s, y: (p.y - layout.oy)/layout.s });
 
   useEffect(() => {
+    // 방어: frames[cur]이 undefined이거나 url이 없으면 setImg(null)
     if (!fm || !fm.url) {
       setImg(null);
       return;
+    }
+    // ObjectURL이 유효한지 확인, revoke된 경우 재생성 시도
+    if (fm.file && (!fm.url || !window.URL || !fm.url.startsWith('blob:'))) {
+      // url이 없거나 revoke된 경우, frameStore에서 재생성 시도
+      try {
+        const url = URL.createObjectURL(fm.file);
+        fm.url = url;
+      } catch {}
     }
     const prev = prevFrameRef.current;
     const diff = prev != null ? Math.abs(fm.i - prev) : 0;
@@ -147,7 +156,7 @@ export default function OverlayCanvas(){
     setActiveId(null); setDragMode('none'); setGhostBox(null); dragAnchor.current = null;
     setIdEdit(v=> ({...v, show:false}));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fm?.url, isPlaying]);
+  }, [fm?.url, isPlaying, fm?.file]);
 
   // 첫 프레임 박스가 비어 있으면 즉시 재조회 (GT/PRED 각각 1회)
   useEffect(()=>{

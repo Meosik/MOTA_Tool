@@ -4,6 +4,8 @@ import InteractiveCanvas from './InteractiveCanvas';
 import MapControlPanel from './MapControlPanel';
 import React, { useState, useCallback } from 'react';
 import { useMapStore } from '../../store/mapStore';
+import CollapseBoundaryToggle from '../CollapseBoundaryToggle';
+import { useUIStore } from '../../store/uiStore';
 
 export default function MapPage() {
   const { projectId, imageId, setImageId, folderId, setFolderId, gtId, setGtId, predId, setPredId } = useMapContext();
@@ -52,24 +54,29 @@ export default function MapPage() {
   const currentImage = images[currentImageIndex] || null;
   const imageUrl = currentImage ? (currentImage.url || URL.createObjectURL(currentImage.file)) : null;
   const currentImageId = currentImage?.id;
+  const mapImageListCollapsed = useUIStore(s=>s.mapImageListCollapsed);
+  const setMapImageListCollapsed = useUIStore(s=>s.setMapImageListCollapsed);
+  const leftWidthPx = 256; // 16rem
   
   // Filter by current image only - don't apply confidence/IoU filtering here
   // Let InteractiveCanvas handle that based on slider values
   const filteredGt = currentImageId ? gtAnnotations.filter(ann => ann.image_id === currentImageId) : [];
   const filteredPred = currentImageId ? predAnnotations.filter(ann => ann.image_id === currentImageId) : [];
   return (
-    <div className="h-full grid grid-cols-[16rem_1fr_20rem] min-h-0">
-      <MapImageSidebar
-        projectId={projectId}
-        currentId={annotationId}
-        setCurrentId={id => setImageId(id ? Number(id) : null)}
-        annotationIdList={annotationIdList}
-        onUploadSuccess={handleFolderUpload}
-        folderId={folderId}
-        currentImageId={currentImageId || null}
-        onImageSelect={handleImageSelect}
-      />
-      <div className="min-h-0 min-w-0 flex flex-col">
+    <div className={`h-full min-h-0 ${mapImageListCollapsed ? 'grid grid-cols-[1fr_20rem]' : 'grid grid-cols-[16rem_1fr_20rem]'} transition-[grid-template-columns] duration-200`}>
+      {!mapImageListCollapsed && (
+        <MapImageSidebar
+          projectId={projectId}
+          currentId={annotationId}
+          setCurrentId={id => setImageId(id ? Number(id) : null)}
+          annotationIdList={annotationIdList}
+          onUploadSuccess={handleFolderUpload}
+          folderId={folderId}
+          currentImageId={currentImageId || null}
+          onImageSelect={handleImageSelect}
+        />
+      )}
+      <div className="min-h-0 min-w-0 flex flex-col relative">
         <InteractiveCanvas
           imageUrl={imageUrl}
           gtAnnotations={filteredGt}
@@ -81,6 +88,11 @@ export default function MapPage() {
             updateAnnotation({ ...ann, image_id: currentImageId }, 'pred');
           }}
           categories={categories ? Object.fromEntries(Object.entries(categories).map(([id, name]) => [id, { name }])) : {}}
+        />
+        <CollapseBoundaryToggle
+          collapsed={mapImageListCollapsed}
+          onToggle={()=> setMapImageListCollapsed(!mapImageListCollapsed)}
+          expandedOffsetPx={leftWidthPx}
         />
       </div>
       <MapControlPanel 
