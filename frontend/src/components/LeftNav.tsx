@@ -2,7 +2,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import useFrameStore from '../store/frameStore'
 import { iouRect } from '../utils/matching'
-import computeMunkres from 'munkres-js'
 
 const PAGE = 8
 
@@ -115,100 +114,7 @@ export default function LeftPanel(){
     }
   }
 
-  // 로컬 결정적 스캐너: 매 프레임 (i-1) ↔ i 매칭 비교
-  function hungarianMatch(iouMat: number[][], thr: number): [number, number][] {
-    const G = iouMat.length; const P = G ? iouMat[0].length : 0;
-    if (!G || !P) return [];
-    const cost = iouMat.map(row => row.map(v => v >= thr ? (1 - v) : 1));
-    let assignment: [number, number][] = [];
-    try {
-      assignment = computeMunkres(cost) as [number, number][];
-    } catch {
-      const used = new Set<number>();
-      for (let gi=0; gi<G; gi++) {
-        let bestJ=-1; let bestC=Infinity;
-        for (let pj=0; pj<P; pj++) {
-          if (used.has(pj)) continue;
-          const c = cost[gi][pj];
-          if (c < bestC) { bestC=c; bestJ=pj; }
-        }
-        if (bestJ>=0) { used.add(bestJ); assignment.push([gi,bestJ]); }
-      }
-    }
-    return assignment.filter(([gi,pj]) => iouMat[gi][pj] >= thr);
-  }
 
-  function buildPredBoxes(frameIdx:number){
-    const predFlat = getFrameBoxes('pred', frameIdx);
-    const out: { id:number; x:number; y:number; w:number; h:number; conf:number }[] = [];
-    for (const p of predFlat){
-      const [x,y,w,h] = p.bbox.map(Number) as [number,number,number,number];
-      const base = { id:Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1 };
-      const b = getPredBox(frameIdx, base.id, base);
-      const bid = Number(b.id);
-      if ((b.conf ?? 1) < conf) continue;
-      out.push({ id: bid, x: b.x, y: b.y, w: b.w, h: b.h, conf: b.conf ?? 1 });
-    }
-    return out;
-  }
-
-  function matchFrame(frameIdx:number){
-    const gtFlat = getFrameBoxes('gt', frameIdx);
-    const predBoxes = buildPredBoxes(frameIdx);
-    const iouMat = gtFlat.map(g => {
-      const [gx,gy,gw,gh] = g.bbox.map(Number) as [number,number,number,number];
-      return predBoxes.map(p => iouRect(p, { x: gx, y: gy, w: gw, h: gh, id: -1 }));
-    });
-    let pairs: [number, number][];
-    // 로컬 스캔은 정확성을 우선 → Hungarian (fallback greedy)
-    pairs = hungarianMatch(iouMat, iou);
-    const map = new Map<number, number>();
-    for (const [gi,pj] of pairs){
-      const gtId = Number(gtFlat[gi].id);
-      const predId = Number(predBoxes[pj].id);
-      map.set(gtId, predId);
-    }
-    return { map, gt: gtFlat, pred: predBoxes };
-  }
-
-  function scanLocal(){
-    if (!gtAnnotationId || !predAnnotationId) return;
-    const idswFrameList:number[] = [];
-    const details: DetailItem[] = [];
-    for (const fr of frames){
-      if (fr.i === 1) continue; // 첫 프레임은 이전 매칭 없음 → IDSW 불가
-      const prev = matchFrame(fr.i - 1);
-      const cur = matchFrame(fr.i);
-      let idswCount = 0;
-      let tp = 0; let fp = 0; let fn = 0;
-      // 현재 매칭 재계산
-      const curAssign = cur.map;
-      const prevAssign = prev.map;
-      const matchedPredIds = new Set<number>();
-      const matchedGtIdx = new Set<number>();
-      cur.gt.forEach((g, gi) => {
-        const gtId = Number(g.id);
-        const predId = curAssign.get(gtId);
-        if (predId != null){
-          matchedGtIdx.add(gi);
-          matchedPredIds.add(predId);
-          const prevPredId = prevAssign.get(gtId);
-          if (prevPredId != null && prevPredId !== predId) {
-            idswCount += 1; // switch
-          } else {
-            tp += 1; // stable match
-          }
-        }
-      });
-      fp = cur.pred.filter(p => !matchedPredIds.has(Number(p.id))).length;
-      fn = cur.gt.filter((_, gi) => !matchedGtIdx.has(gi)).length;
-      const isIDSW = idswCount > 0;
-      if (isIDSW) idswFrameList.push(fr.i);
-      details.push({ f: fr.i, tp, fp, fn, idsw: isIDSW, gt: cur.gt.length, pred: cur.pred.length });
-    }
-    useFrameStore.setState({ idswFrames: idswFrameList, idswDetails: details });
-    setPage(0);
-  }
 
   // 자동 재스캔 비활성화: 사용자가 "재스캔" 버튼을 눌러야 서버 측 IDSW/카운트 갱신
 
@@ -222,13 +128,6 @@ export default function LeftPanel(){
           title="서버(override 반영) 재스캔"
         >
           스캔
-        </button>
-        <button
-          onClick={()=>{ scanLocal(); }}
-          className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-          title="로컬 결정적 재스캔 (i-1 기반)"
-        >
-          로컬
         </button>
         <div className="ml-auto text-xs text-gray-500">
           {idswFrames.length}개

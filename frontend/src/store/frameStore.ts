@@ -89,6 +89,11 @@ type State = {
   resetFrame: (frame:number)=>void;
   resetCurrentFrame: ()=>void;
   exportModifiedPred: ()=>void;
+  exportActive: boolean;
+  exportProgress: number;
+  exportTotal: number;
+  exportMessage: string;
+  cancelExport: ()=>void;
 };
 
 // ---- Tracks 캐시 (변경 없음)
@@ -923,43 +928,55 @@ const useFrameStore = create<State>((set, get) => ({
     if (undoStack.length > MAX_UNDO_STACK) undoStack = undoStack.slice(-MAX_UNDO_STACK);
     set({ overrides, overrideVersion: get().overrideVersion + 1, undoStack, redoStack: [] });
   },
+  exportActive: false,
+  exportProgress: 0,
+  exportTotal: 0,
+  exportMessage: '',
+  cancelExport: ()=>{
+    set({ exportActive: false, exportMessage: '취소됨' });
+  },
 
   exportModifiedPred: async ()=>{
     const predAnnId = get().predAnnotationId;
     if (!predAnnId) { alert('Pred 파일을 먼저 불러오세요'); return; }
-    // 전체 트랙 미선로딩 상태면 먼저 로드 시도
+    const frameObjs = get().frames.slice();
+    if (!frameObjs.length) { alert('프레임이 없습니다'); return; }
+    set({ exportActive: true, exportProgress: 0, exportTotal: frameObjs.length, exportMessage: '전체 트랙 준비 중' });
     if (!get().allTracksLoaded) {
+      set({ exportMessage: '전체 트랙 선로딩 중...' });
       await get().preloadAllBoxes().catch(()=>{});
     }
-    // prCache에서 해당 predAnnId 모든 프레임 수집
+    const orderedFrames = frameObjs.map(f=>f.i).sort((a,b)=>a-b);
     const overrides = get().overrides;
-    const allKeys = Array.from(prCache.keys()).filter(k => k.startsWith(predAnnId + ':'));
-    if (allKeys.length === 0) { alert('예측 박스가 아직 로드되지 않았습니다. 조금 기다린 후 다시 시도하세요.'); return; }
     const lines: string[] = [];
-    for (const key of allKeys) {
-      // key 형식: annId:frame
-      const parts = key.split(':');
-      const frameNum = Number(parts[1]);
+    for (let idx=0; idx<orderedFrames.length; idx++) {
+      if (!get().exportActive) return; // 취소됨
+      const fnum = orderedFrames[idx];
+      set({ exportProgress: idx, exportMessage: `프레임 ${fnum} 처리 중 (${idx+1}/${orderedFrames.length})` });
+      const key = `${predAnnId}:${fnum}`;
+      if (!prCache.get(key)) {
+        await get().fetchSingleFrameBoxes('pred', fnum).catch(()=>{});
+      }
       const baseBoxes = prCache.get(key) || [];
-      const ovMap = overrides.get(frameNum);
+      const ovMap = overrides.get(fnum);
       for (const fb of baseBoxes) {
         const origId = Number(fb.id);
         const base: Box = { id: origId, x: fb.bbox[0], y: fb.bbox[1], w: fb.bbox[2], h: fb.bbox[3], conf: (fb as any).conf ?? 1.0 };
         const applied = ovMap?.get(origId) ? { ...ovMap.get(origId)! } : base;
         const conf = applied.conf ?? base.conf ?? 1.0;
-        lines.push(`${frameNum},${applied.id},${applied.x.toFixed(2)},${applied.y.toFixed(2)},${applied.w.toFixed(2)},${applied.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
+        lines.push(`${fnum},${applied.id},${applied.x.toFixed(2)},${applied.y.toFixed(2)},${applied.w.toFixed(2)},${applied.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
       }
-      // override에만 존재하는 (새로운) 박스가 있다면 추가 (기존 origId와 매칭되지 않은 키)
       if (ovMap) {
         for (const [origId, box] of ovMap.entries()) {
           const exists = baseBoxes.find(b => Number(b.id) === origId);
-          if (!exists) {
-            const conf = box.conf ?? 1.0;
-            lines.push(`${frameNum},${box.id},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
-          }
+            if (!exists) {
+              const conf = box.conf ?? 1.0;
+              lines.push(`${fnum},${box.id},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
+            }
         }
       }
     }
+    set({ exportMessage: '파일 생성 중...' });
     const content = lines.join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -970,6 +987,7 @@ const useFrameStore = create<State>((set, get) => ({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    set({ exportActive: false, exportProgress: orderedFrames.length, exportMessage: '완료' });
   },
 
   // (로컬 스캔 제거됨) - 서버 override 평가로 대체

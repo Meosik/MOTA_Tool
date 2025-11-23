@@ -153,49 +153,45 @@ def evaluate_mota_detailed(
     pr_frames = load_mot(pred_path)
 
     all_frames = sorted(set(gt_frames.keys()) | set(pr_frames.keys()))
+
     TP = FP = FN = IDSW = 0
     total_gt = 0
-    assign: Dict[int, int] = {}     # gt id -> last matched pred id
+    prev_assign: Dict[int, int] = {}  # gt id -> pred id (이전 프레임)
     idsw_frames: List[int] = []
+    per_frame: List[Dict] = []
 
-    per_frame: List[Dict] = []      # ← 프레임별 요약 저장
-
-    for f in all_frames:
+    for idx, f in enumerate(all_frames):
         gts = gt_frames.get(f, [])
         prs_all = pr_frames.get(f, [])
-        # conf 필터
         prs = [p for p in prs_all if float(p[5]) >= conf_thr]
-
         total_gt += len(gts)
 
         matches, un_g, un_p = match_hungarian(prs, gts, iou_thr)
         tp = len(matches)
         fn = len(un_g)
         fp = len(un_p)
-
         TP += tp; FN += fn; FP += fp
 
-        # IDSW 판정
-        changed = False
-        cur_map: Dict[int,int] = {}
-        for (gt_id, pred_id) in matches:
-            cur_map[gt_id] = pred_id
-            if gt_id in assign and assign[gt_id] != pred_id:
-                IDSW += 1
-                changed = True
-        if changed:
+        # IDSW: 직전 프레임(prev_assign)과만 비교
+        cur_assign: Dict[int, int] = {gt_id: pred_id for (gt_id, pred_id) in matches}
+        idsw_count = 0
+        for gt_id, pred_id in cur_assign.items():
+            if gt_id in prev_assign and prev_assign[gt_id] != pred_id:
+                idsw_count += 1
+        is_idsw = idsw_count > 0 and idx > 0  # 첫 프레임은 IDSW 없음
+        if is_idsw:
             idsw_frames.append(f)
-        assign.update(cur_map)
-
+            IDSW += idsw_count
         per_frame.append({
             "f": f,
             "tp": tp,
             "fp": fp,
             "fn": fn,
-            "idsw": changed,
+            "idsw": is_idsw,
             "gt": len(gts),
             "pred": len(prs),
         })
+        prev_assign = cur_assign
 
     mota = 1.0 if total_gt == 0 else (1.0 - (FN + FP + IDSW) / float(total_gt))
     stats = {"TP": TP, "FP": FP, "FN": FN, "IDSW": IDSW, "total_gt": total_gt}

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import LeftPanel from '../components/LeftNav'
 import OverlayCanvas from '../components/OverlayCanvas'
 import RightPanel from '../components/RightPanel'
+import ExportModal from '../components/ExportModal'
 import useFrameStore from '../store/frameStore'
 import BottomHud from '../components/BottomHud'
 
@@ -43,6 +44,7 @@ export default function AppLayout() {
         <RightPanel />
       </div>
       <KeyboardShortcuts />
+      <ExportModal />
     </div>
   )
 }
