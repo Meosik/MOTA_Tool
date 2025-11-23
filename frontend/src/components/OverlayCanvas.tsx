@@ -80,6 +80,7 @@ export default function OverlayCanvas(){
 
   const [gtBoxes, setGtBoxes] = useState<FlatBox[]>([]);
   const [predBase, setPredBase] = useState<FlatBox[]>([]);
+  const [boxesFrameIndex, setBoxesFrameIndex] = useState<number>(-1); // Track which frame the boxes belong to
 
   const [activeId, setActiveId] = useState<number|null>(null);
   const [dragMode, setDragMode] = useState<DragMode>('none');
@@ -129,7 +130,13 @@ export default function OverlayCanvas(){
     let aborted = false;
     (async ()=>{
       if (gtId && fm) {
-        try { const bb = await fetchFrameBoxes(gtId, fm.i); if (!aborted) setGtBoxes(bb); }
+        try { 
+          const bb = await fetchFrameBoxes(gtId, fm.i); 
+          if (!aborted) {
+            setGtBoxes(bb);
+            setBoxesFrameIndex(fm.i);
+          }
+        }
         catch { if(!aborted) setGtBoxes([]); }
       } else setGtBoxes([]);
     })();
@@ -140,7 +147,13 @@ export default function OverlayCanvas(){
     let aborted = false;
     (async ()=>{
       if (predId && fm) {
-        try { const bb = await fetchFrameBoxes(predId, fm.i); if (!aborted) setPredBase(bb); }
+        try { 
+          const bb = await fetchFrameBoxes(predId, fm.i); 
+          if (!aborted) {
+            setPredBase(bb);
+            setBoxesFrameIndex(fm.i);
+          }
+        }
         catch { if(!aborted) setPredBase([]); }
       } else setPredBase([]);
     })();
@@ -294,7 +307,9 @@ export default function OverlayCanvas(){
     // Generate cache key for current frame state
     const getCacheKey = () => {
       const boxKey = activeId !== null && ghostBox ? `editing-${activeId}` : '';
-      return `${fm?.i ?? 'none'}-${showGT}-${showPred}-${gtBoxes.length}-${predBoxes.length}-${boxKey}`;
+      // Use a version number that changes when boxes update to invalidate cache
+      const boxVersion = `${gtBoxes.length}-${predBoxes.length}`;
+      return `${fm?.i ?? 'none'}-v${boxVersion}-${showGT}-${showPred}-${boxKey}`;
     };
 
     // Render to OffscreenCanvas (or fallback to regular canvas) to avoid blocking main thread
@@ -365,9 +380,12 @@ export default function OverlayCanvas(){
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssW, cssH);
 
-      // Try to use cached frame (only when not editing)
+      // Check if boxes match current frame - if not, skip caching to avoid stale cache
+      const boxesMatchFrame = !fm || boxesFrameIndex === fm.i;
+
+      // Try to use cached frame (only when not editing and boxes match)
       const cacheKey = getCacheKey();
-      const cached = activeId === null ? frameCache.current.get(cacheKey) : null;
+      const cached = activeId === null && boxesMatchFrame ? frameCache.current.get(cacheKey) : null;
       
       if (cached) {
         // Draw cached frame - fast blit operation
@@ -381,8 +399,8 @@ export default function OverlayCanvas(){
       // Draw the offscreen canvas to main canvas
       ctx.drawImage(offscreen as any, 0, 0, cssW, cssH);
 
-      // Cache the rendered frame (only if not editing)
-      if (activeId === null && img) {
+      // Cache the rendered frame (only if not editing and boxes match frame)
+      if (activeId === null && img && boxesMatchFrame) {
         try {
           // Convert OffscreenCanvas to ImageBitmap for efficient caching
           let bitmap: ImageBitmap;
@@ -426,7 +444,7 @@ export default function OverlayCanvas(){
         cancelAnimationFrame(rafId);
       }
     };
-  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm])
+  }, [img, layout.ox, layout.oy, layout.s, layout.dw, layout.dh, gtBoxes, predBoxes, showGT, showPred, activeId, ghostBox, drawBoxes, drawPredHandles, fm, boxesFrameIndex])
 
   function getCanvasPt(e:React.MouseEvent<HTMLCanvasElement>): Vec {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
