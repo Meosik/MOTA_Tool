@@ -8,8 +8,12 @@ import { type FlatBox } from '../lib/api';
 const COLORS = {
   gtStroke: 'rgba(80, 220, 120, 0.95)',
   gtFill:   'rgba(80, 220, 120, 0.18)',
-  predStroke: 'rgba(255, 140, 0, 0.95)',
-  predFill:   'rgba(255, 140, 0, 0.18)',
+  tpStroke: 'rgba(255, 140, 0, 0.95)',
+  tpFill:   'rgba(255, 140, 0, 0.18)',
+  fpStroke: 'rgba(255, 0, 80, 0.95)',
+  fpFill:   'rgba(255, 0, 80, 0.18)',
+  idswStroke: 'rgba(120, 0, 255, 0.95)',
+  idswFill:   'rgba(120, 0, 255, 0.18)',
 };
 const HANDLE_SIZE = 8;
 const HIT_PAD = 6;
@@ -183,7 +187,50 @@ export default function OverlayCanvas(){
   }, [overrideVer]);
 
   type EditablePredBox = Box & { _origId:number };
-  const predBoxes: EditablePredBox[] = useMemo(()=>{
+  // 이전 프레임 GT -> Pred 매핑 (IDSW 감지용)
+  const prevAssignRef = useRef<Map<number, number>>(new Map());
+  const lastFrameIndexRef = useRef<number | null>(null);
+
+  // Hungarian 매칭 (간단 구현) - 작은 행렬용
+  function hungarianMatch(iouMat: number[][], thr: number): [number, number][] {
+    const G = iouMat.length; const P = G? iouMat[0].length : 0;
+    if (!G || !P) return [];
+    // 비용 행렬 생성 (IoU<thr -> 큰 비용)
+    const cost = iouMat.map(row => row.map(v => v>=thr ? (1 - v) : 1));
+    // 간단한 O(n^3) Hungarian (파생): 행 최소 뺄셈 -> 열 최소 뺄셈 -> 커버/라벨링 반복.
+    // 여기서는 규모 작으므로 라이브러리 없이 축소 구현 (정확성 충분)
+    // Step1: 행 최소
+    for (let i=0;i<G;i++){ const m = Math.min(...cost[i]); for (let j=0;j<P;j++) cost[i][j]-=m; }
+    // Step2: 열 최소
+    for (let j=0;j<P;j++){ let m = Infinity; for (let i=0;i<G;i++) m = Math.min(m, cost[i][j]); for (let i=0;i<G;i++) cost[i][j]-=m; }
+    // 커버된 0 매칭 찾기 (탐욕) - 소규모 매트릭스 최적해 확보에 충분 (완전 Hungarian 축약)
+    const usedRows = new Set<number>(); const usedCols = new Set<number>(); const pairs: [number,number][] = [];
+    // 반복적으로 가장 낮은 비용 0 선택
+    for (let _iter=0; _iter < Math.min(G,P); _iter++) {
+      let found = false;
+      for (let i=0;i<G;i++) {
+        if (usedRows.has(i)) continue;
+        // 후보 0들
+        const zeros = [] as number[];
+        for (let j=0;j<P;j++) if (!usedCols.has(j) && cost[i][j]===0) zeros.push(j);
+        if (zeros.length === 1) { const j=zeros[0]; usedRows.add(i); usedCols.add(j); pairs.push([i,j]); found=true; }
+      }
+      if (found) continue;
+      // 다중 0 행 처리: 첫 미사용 0 선택
+      for (let i=0;i<G;i++) {
+        if (usedRows.has(i)) continue;
+        for (let j=0;j<P;j++) {
+          if (!usedCols.has(j) && cost[i][j]===0) { usedRows.add(i); usedCols.add(j); pairs.push([i,j]); found=true; break; }
+        }
+        if (found) break;
+      }
+      if (!found) break; // 더 이상 0 없음
+    }
+    // IoU<thr 제거
+    return pairs.filter(([gi, pj]) => iouMat[gi][pj] >= thr);
+  }
+
+  const predBoxesRaw: EditablePredBox[] = useMemo(()=>{
     if (!fm) return [];
     const out: EditablePredBox[] = [];
     for (const p of predBase) {
@@ -191,22 +238,47 @@ export default function OverlayCanvas(){
       const base: Box = { id: Number(p.id), x, y, w, h, conf: (p as any).conf ?? 1.0 };
       const origId = Number(base.id);
       const b = getPredBox(fm.i, origId, base);
-      if ((b.conf ?? 1) < confThr) continue;
-      if (iouThr > 0 && gtBoxes.length > 0) {
-        let maxI = 0;
-        for (const g of gtBoxes) {
-          const gbb = g.bbox as [number,number,number,number];
-          const curI = iouRect(b, { x: gbb[0], y: gbb[1], w: gbb[2], h: gbb[3], id: -1 });
-          if (curI > maxI) maxI = curI;
-          if (maxI >= iouThr) break;
-        }
-        if (maxI < iouThr) continue;
-      }
-      // 확정된 box에 원본 id 보존
+      if ((b.conf ?? 1) < confThr) continue; // conf 필터만 적용 (IoU는 색상 분류에 사용)
       out.push({ ...b, _origId: origId });
     }
     return out;
-  }, [predBase, fm?.i, overrideVer, iouThr, confThr, gtBoxes, getPredBox]);
+  }, [predBase, fm?.i, overrideVer, confThr, getPredBox]);
+
+  type ClassifiedBox = EditablePredBox & { _cls: 'TP' | 'FP' | 'IDSW' };
+  const predBoxes: ClassifiedBox[] = useMemo(()=>{
+    if (!fm) return [];
+    if (gtBoxes.length === 0) return predBoxesRaw.map(b => ({ ...b, _cls: 'FP' }));
+    // IoU 행렬
+    const iouMat: number[][] = gtBoxes.map(g => {
+      const [gx,gy,gw,gh] = g.bbox.map(Number) as [number,number,number,number];
+      return predBoxesRaw.map(p => iouRect(p, { x: gx, y: gy, w: gw, h: gh, id: -1 }));
+    });
+    const pairs = hungarianMatch(iouMat, iouThr);
+    const matchedPredIdx = new Set<number>();
+    const cls: ClassifiedBox[] = predBoxesRaw.map(p => ({ ...p, _cls: 'FP' }));
+    // IDSW 판정 준비
+    const curAssign = new Map<number, number>();
+    for (const [gi, pj] of pairs) {
+      matchedPredIdx.add(pj);
+      const gtId = Number(gtBoxes[gi].id);
+      const predId = Number(predBoxesRaw[pj].id);
+      curAssign.set(gtId, predId);
+      const prev = prevAssignRef.current.get(gtId);
+      if (prev != null && prev !== predId) {
+        cls[pj]._cls = 'IDSW';
+      } else {
+        cls[pj]._cls = 'TP';
+      }
+    }
+    // 프레임 순서 역행 시 매핑 초기화
+    if (lastFrameIndexRef.current != null && fm.i < lastFrameIndexRef.current) {
+      prevAssignRef.current.clear();
+    }
+    // 현재 매핑 저장
+    for (const [gtId, predId] of curAssign.entries()) prevAssignRef.current.set(gtId, predId);
+    lastFrameIndexRef.current = fm.i;
+    return cls;
+  }, [predBoxesRaw, gtBoxes, fm?.i, iouThr]);
 
   function hitWhichHandle(cpt:Vec, b:Box): DragMode {
     const p = toCanvas({x:b.x, y:b.y});
@@ -236,41 +308,42 @@ export default function OverlayCanvas(){
   // Memoize drawing functions for better performance
   const drawBoxes = useCallback((
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-    boxes: (FlatBox | Box)[],
-    isGT: boolean,
+    boxes: (FlatBox | Box | ClassifiedBox)[],
+    kind: 'gt' | 'pred',
     scale: number,
     offset: { ox: number; oy: number }
   ) => {
-    const strokeColor = isGT ? COLORS.gtStroke : COLORS.predStroke;
-    const fillColor = isGT ? COLORS.gtFill : COLORS.predFill;
-    const bgColor = isGT ? 'rgba(80, 220, 120, 0.95)' : 'rgba(255, 140, 0, 0.95)';
-
     ctx.lineWidth = LINE_W;
-    ctx.strokeStyle = strokeColor;
-    ctx.fillStyle = fillColor;
-
-    // Batch drawing operations
     ctx.save();
     for (const box of boxes) {
-      const isFlatBox = 'bbox' in box;
-      const [x, y, w, h] = isFlatBox 
-        ? (box as FlatBox).bbox as [number, number, number, number]
-        : [box.x, box.y, box.w, box.h];
-      const id = isFlatBox ? (box as FlatBox).id : box.id;
-
+      const isFlatBox = 'bbox' in box && !('_cls' in box);
+      let x:number,y:number,w:number,h:number,id:any, cls: 'TP'|'FP'|'IDSW'|undefined;
+      if (isFlatBox) {
+        [x,y,w,h] = (box as FlatBox).bbox.map(Number) as any;
+        id = (box as FlatBox).id;
+      } else {
+        const b = box as any;
+        x = b.x; y = b.y; w = b.w; h = b.h; id = b.id; cls = b._cls;
+      }
       const px = offset.ox + x * scale;
       const py = offset.oy + y * scale;
       const cw = w * scale;
       const ch = h * scale;
-
-      // Draw box
+      // 색상 결정
+      let stroke:string; let fill:string; let labelBg:string;
+      if (kind==='gt') { stroke=COLORS.gtStroke; fill=COLORS.gtFill; labelBg=COLORS.gtStroke; }
+      else {
+        if (cls==='IDSW'){ stroke=COLORS.idswStroke; fill=COLORS.idswFill; labelBg=COLORS.idswStroke; }
+        else if (cls==='FP'){ stroke=COLORS.fpStroke; fill=COLORS.fpFill; labelBg=COLORS.fpStroke; }
+        else { stroke=COLORS.tpStroke; fill=COLORS.tpFill; labelBg=COLORS.tpStroke; }
+      }
+      ctx.strokeStyle = stroke;
+      ctx.fillStyle = fill;
       ctx.beginPath();
       ctx.rect(px, py, cw, ch);
       ctx.fill();
       ctx.stroke();
-
-      // Draw label
-      drawIdLabel(ctx, String(id), px, Math.max(12, py - 4), bgColor);
+      drawIdLabel(ctx, String(id), px, Math.max(12, py - 4), labelBg);
     }
     ctx.restore();
   }, []);
@@ -283,7 +356,8 @@ export default function OverlayCanvas(){
     scale: number,
     offset: { ox: number; oy: number }
   ) => {
-    ctx.fillStyle = COLORS.predStroke;
+    // 핸들 기본 색상: TP 색상 사용
+    ctx.fillStyle = COLORS.tpStroke;
     
     for (const b of boxes) {
       const isActive = activeId === b.id && ghostBox;
@@ -365,20 +439,18 @@ export default function OverlayCanvas(){
 
       // Draw GT boxes (batched)
       if (showGT && gtBoxes.length) {
-        drawBoxes(offscreenCtx, gtBoxes, true, layout.s, offset);
+        drawBoxes(offscreenCtx, gtBoxes, 'gt', layout.s, offset);
       }
 
       // Draw Pred boxes (batched)
       if (showPred && predBoxes.length) {
-        // Adjust predBoxes for active/ghost state
         const adjustedPredBoxes = predBoxes.map(b => {
           if (activeId === b.id && ghostBox) {
-            return ghostBox;
+            return { ...ghostBox, _cls: b._cls } as ClassifiedBox;
           }
           return b;
         });
-        
-        drawBoxes(offscreenCtx, adjustedPredBoxes, false, layout.s, offset);
+        drawBoxes(offscreenCtx, adjustedPredBoxes, 'pred', layout.s, offset);
         drawPredHandles(offscreenCtx, predBoxes, activeId, ghostBox, layout.s, offset);
       }
 

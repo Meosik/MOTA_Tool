@@ -911,36 +911,48 @@ const useFrameStore = create<State>((set, get) => ({
     set({ overrides, overrideVersion: get().overrideVersion + 1, undoStack, redoStack: [] });
   },
 
-  exportModifiedPred: ()=>{
-    const frames = get().frames;
-    const overrides = get().overrides;
+  exportModifiedPred: async ()=>{
     const predAnnId = get().predAnnotationId;
-    
     if (!predAnnId) { alert('Pred 파일을 먼저 불러오세요'); return; }
-    if (frames.length === 0) { alert('프레임을 먼저 불러오세요'); return; }
-    
-    // 수정된 모든 박스를 MOT 형식으로 내보내기
+    // 전체 트랙 미선로딩 상태면 먼저 로드 시도
+    if (!get().allTracksLoaded) {
+      await get().preloadAllBoxes().catch(()=>{});
+    }
+    // prCache에서 해당 predAnnId 모든 프레임 수집
+    const overrides = get().overrides;
+    const allKeys = Array.from(prCache.keys()).filter(k => k.startsWith(predAnnId + ':'));
+    if (allKeys.length === 0) { alert('예측 박스가 아직 로드되지 않았습니다. 조금 기다린 후 다시 시도하세요.'); return; }
     const lines: string[] = [];
-    
-    for (const frame of frames) {
-      const frameOverrides = overrides.get(frame.i);
-      if (!frameOverrides || frameOverrides.size === 0) continue;
-      for (const [, box] of frameOverrides.entries()) {
-        const conf = box.conf ?? 1.0;
-        // Box 내부 id 필드를 사용 (표시/수정된 id 반영)
-        const line = `${frame.i},${box.id},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`;
-        lines.push(line);
+    for (const key of allKeys) {
+      // key 형식: annId:frame
+      const parts = key.split(':');
+      const frameNum = Number(parts[1]);
+      const baseBoxes = prCache.get(key) || [];
+      const ovMap = overrides.get(frameNum);
+      for (const fb of baseBoxes) {
+        const origId = Number(fb.id);
+        const base: Box = { id: origId, x: fb.bbox[0], y: fb.bbox[1], w: fb.bbox[2], h: fb.bbox[3], conf: (fb as any).conf ?? 1.0 };
+        const applied = ovMap?.get(origId) ? { ...ovMap.get(origId)! } : base;
+        const conf = applied.conf ?? base.conf ?? 1.0;
+        lines.push(`${frameNum},${applied.id},${applied.x.toFixed(2)},${applied.y.toFixed(2)},${applied.w.toFixed(2)},${applied.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
+      }
+      // override에만 존재하는 (새로운) 박스가 있다면 추가 (기존 origId와 매칭되지 않은 키)
+      if (ovMap) {
+        for (const [origId, box] of ovMap.entries()) {
+          const exists = baseBoxes.find(b => Number(b.id) === origId);
+          if (!exists) {
+            const conf = box.conf ?? 1.0;
+            lines.push(`${frameNum},${box.id},${box.x.toFixed(2)},${box.y.toFixed(2)},${box.w.toFixed(2)},${box.h.toFixed(2)},${conf.toFixed(4)},-1,-1,-1`);
+          }
+        }
       }
     }
-    
-    if (lines.length === 0) { alert('수정된 박스가 없습니다'); return; }
-    
     const content = lines.join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `pred_modified_${new Date().getTime()}.txt`;
+    link.download = `pred_overrides_applied_${new Date().getTime()}.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
