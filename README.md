@@ -225,6 +225,24 @@ docker compose up -d
 
 To regenerate the bundle after edits, repeat build + save steps. This mode avoids recipient needing Node/Python toolchains.
 
+#### Using a Git LFS-Tracked Bundle
+If the tar bundle (e.g. `mota_tool_bundle_20251125.tar`) is committed via Git LFS instead of distributed manually:
+```bash
+git clone https://github.com/<YOUR_ORG>/<YOUR_REPO>.git
+cd <YOUR_REPO>
+git lfs install       # one-time
+git lfs pull          # fetch large LFS objects (tar file)
+docker load -i mota_tool_bundle_20251125.tar
+cd deploy
+copy backend.env.example backend.env
+copy frontend.env.example frontend.env
+docker compose up -d
+```
+Notes:
+- LFS bandwidth quotas apply (consider GitHub Releases for very large/rarely changing bundles).
+- Update the tar by regenerating locally (`docker save ...`) then recommitting (staging after `.gitattributes` changes so LFS pointer is preserved).
+- Consumers ONLY need Docker + Git LFS; no build toolchains required.
+
 ### 3. Local Development (Node + Python Without Docker)
 Backend:
 ```bash
