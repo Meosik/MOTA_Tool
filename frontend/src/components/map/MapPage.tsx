@@ -74,10 +74,13 @@ export default function MapPage() {
           folderId={folderId}
           currentImageId={currentImageId || null}
           onImageSelect={handleImageSelect}
-        />
+          selectedPrCurveCat={selectedPrCurveCat}
+          />
       )}
       <div className="min-h-0 min-w-0 flex flex-col relative">
+        {/* 사이드바 접힘/펼침마다 InteractiveCanvas 강제 remount */}
         <InteractiveCanvas
+          key={mapImageListCollapsed ? 'collapsed' : 'expanded'}
           imageUrl={imageUrl}
           gtAnnotations={filteredGt}
           predAnnotations={filteredPred}
@@ -95,12 +98,14 @@ export default function MapPage() {
           expandedOffsetPx={leftWidthPx}
         />
       </div>
-      <MapControlPanel 
-        projectId={projectId} 
-        annotationId={annotationId}
-        gtId={gtId}
-        predId={predId}
-      />
+        <MapControlPanel 
+          projectId={projectId} 
+          annotationId={annotationId}
+          gtId={gtId}
+          predId={predId}
+          selectedPrCurveCat={selectedPrCurveCat}
+          setSelectedPrCurveCat={setSelectedPrCurveCat}
+        />
     </div>
   );
 }

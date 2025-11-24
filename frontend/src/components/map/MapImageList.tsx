@@ -27,19 +27,19 @@ function calculateIoU(box1: [number, number, number, number], box2: [number, num
   return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
-// Calculate simple AP for a single image
+
+// COCO-style AP (area under PR curve, 101-point interpolation)
 function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number): number {
   if (gtBoxes.length === 0) return predBoxes.length === 0 ? 1.0 : 0.0;
   if (predBoxes.length === 0) return 0.0;
-  
   const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
-  let tp = 0;
+  let tp = 0, fp = 0;
   const matched = new Set<number>();
-  
+  const precisions: number[] = [];
+  const recalls: number[] = [];
   for (const pred of sortedPreds) {
     let bestIou = 0;
     let bestGtIdx = -1;
-    
     gtBoxes.forEach((gt, idx) => {
       if (matched.has(idx)) return;
       const iou = calculateIoU(pred.bbox, gt.bbox);
@@ -48,16 +48,53 @@ function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number
         bestGtIdx = idx;
       }
     });
-    
     if (bestIou >= iouThreshold && bestGtIdx >= 0) {
       tp++;
       matched.add(bestGtIdx);
+    } else {
+      fp++;
+    }
+    precisions.push(tp / (tp + fp));
+    recalls.push(tp / gtBoxes.length);
+  }
+  // 101-point interpolation (COCO)
+  let ap = 0;
+  for (let r = 0; r <= 100; r++) {
+    const recallThresh = r / 100;
+    // max precision for recall >= recallThresh
+    let p = 0;
+    for (let i = 0; i < recalls.length; i++) {
+      if (recalls[i] >= recallThresh) p = Math.max(p, precisions[i]);
+    }
+    ap += p;
+  }
+  return ap / 101;
+}
+
+// 이미지별 TP/FP/GT 계산
+function getImageStats(gtBoxes: any[], predBoxes: any[], iouThreshold: number) {
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+  let tp = 0, fp = 0;
+  const matched = new Set<number>();
+  for (const pred of sortedPreds) {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+    gtBoxes.forEach((gt, idx) => {
+      if (matched.has(idx)) return;
+      const iou = calculateIoU(pred.bbox, gt.bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = idx;
+      }
+    });
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    } else {
+      fp++;
     }
   }
-  
-  const precision = tp / sortedPreds.length;
-  const recall = tp / gtBoxes.length;
-  return (precision + recall) / 2;
+  return { tp, fp, gt: gtBoxes.length };
 }
 
 // Calculate PR curve points for current image
@@ -171,7 +208,9 @@ function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], pre
   );
 }
 
-export default function MapImageList({ folderId, currentImageId, onImageSelect }: MapImageListProps) {
+import { useState } from 'react';
+
+export default function MapImageList({ folderId, currentImageId, onImageSelect, selectedPrCurveCat }: MapImageListProps & { selectedPrCurveCat?: number }) {
   // Get images and annotations from store
   const images = useMapStore(s => s.images);
   const gtAnnotations = useMapStore(s => s.gtAnnotations);
@@ -271,12 +310,10 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
             {visibleImages.map((image, relativeIdx) => {
               const idx = startIndex + relativeIdx;
               const thumbnailUrl = getImageUrl(idx);
-              const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
-              const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
-              
-              // Use cached mAP value (calculated on-demand)
+              const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
+              const predForImage = predAnnotations.filter(a => a.image_id === image.id);
               const imageMap = cachedMapValues.get(image.id) || 0;
-              
+              const stats = getImageStats(gtForImage, predForImage, iou);
               return (
                 <button
                   key={image.id}
@@ -301,7 +338,6 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
                         IMG
                       </div>
                     )}
-                    
                     {/* Metadata */}
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate" title={image.name}>
@@ -309,8 +345,9 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
                       </div>
                       <div className="flex gap-2 text-xs mt-0.5">
                         <span className="text-gray-600">mAP: {(imageMap * 100).toFixed(1)}%</span>
-                        <span className="text-green-600">GT: {gtCount}</span>
-                        <span className="text-orange-600">Pred: {predCount}</span>
+                        <span className="text-green-600">GT: {stats.gt}</span>
+                        <span className="text-blue-600">TP: {stats.tp}</span>
+                        <span className="text-red-600">FP: {stats.fp}</span>
                       </div>
                     </div>
                   </div>
@@ -321,10 +358,14 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
         </div>
       </div>
       
-      {/* PR Curve for current image */}
+      {/* PR Curve for current image, 클래스별 선택 지원 */}
       {currentImageId !== null && (() => {
-        const gtForCurrent = gtAnnotations.filter(a => a.image_id === currentImageId);
-        const predForCurrent = predAnnotations.filter(a => a.image_id === currentImageId);
+        let gtForCurrent = gtAnnotations.filter(a => a.image_id === currentImageId);
+        let predForCurrent = predAnnotations.filter(a => a.image_id === currentImageId);
+        if (selectedPrCurveCat != null) {
+          gtForCurrent = gtForCurrent.filter(a => a.category === selectedPrCurveCat);
+          predForCurrent = predForCurrent.filter(a => a.category === selectedPrCurveCat);
+        }
         return <PRCurveChart gtBoxes={gtForCurrent} predBoxes={predForCurrent} iouThreshold={iou} />;
       })()}
     </div>

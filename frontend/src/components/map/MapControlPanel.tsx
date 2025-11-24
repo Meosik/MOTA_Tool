@@ -71,6 +71,8 @@ interface MapControlPanelProps {
   annotationId: string | null;
   gtId?: string | null;
   predId?: string | null;
+  selectedPrCurveCat?: number | null;
+  setSelectedPrCurveCat?: (cat: number | null) => void;
 }
 
 // Hierarchical Instance Panel Component
@@ -95,27 +97,26 @@ function InstancePanel({ currentImage, gtAnnotations, predAnnotations }: {
     setVisibleInstances(allIds);
   }, [currentImage?.id, gtAnnotations, predAnnotations, setVisibleInstances]);
   
-  // Group annotations by type and category
-  const groupedAnns = React.useMemo(() => {
-    const gtForImage = gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
-    const predForImage = predAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
-    
-    const gtByCategory = new Map<number, any[]>();
-    gtForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!gtByCategory.has(cat)) gtByCategory.set(cat, []);
-      gtByCategory.get(cat)!.push(ann);
-    });
-    
-    const predByCategory = new Map<number, any[]>();
-    predForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!predByCategory.has(cat)) predByCategory.set(cat, []);
-      predByCategory.get(cat)!.push(ann);
-    });
-    
-    return { gtByCategory, predByCategory };
-  }, [currentImage?.id, gtAnnotations, predAnnotations]);
+    // Group annotations by category (for table)
+    const groupedAnns = React.useMemo(() => {
+      const gtForImage = gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
+      const predForImage = predAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
+      const cats = new Set<number>();
+      gtForImage.forEach(a => cats.add(a.category));
+      predForImage.forEach(a => cats.add(a.category));
+      const byCat: { [cat: number]: { gt: any[]; pred: any[] } } = {};
+      cats.forEach(cat => {
+        byCat[cat] = {
+          gt: gtForImage.filter(a => a.category === cat),
+          pred: predForImage.filter(a => a.category === cat),
+        };
+      });
+      return byCat;
+    }, [currentImage?.id, gtAnnotations, predAnnotations]);
+
+    // 클래스별 PR-curve radio state (상위에서 내려받음)
+    // const [selectedPrCurveCat, setSelectedPrCurveCat] = useState<number|null>(null);
+    const { selectedPrCurveCat, setSelectedPrCurveCat } = props;
   
   const toggleGroup = (groupId: string) => {
     setExpandedGroups(prev => {
@@ -150,100 +151,85 @@ function InstancePanel({ currentImage, gtAnnotations, predAnnotations }: {
   };
   
   if (!currentImage) return null;
-  
+
+  // IoU threshold (store에서)
+  const iou = useMapStore(s => s.iou);
+
+  // 클래스별 TP/FP 계산
+  function getStats(gt: any[], pred: any[]): {tp: number, fp: number, gt: number} {
+    let tp = 0, fp = 0;
+    const matched = new Set<number>();
+    const sortedPred = [...pred].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+    for (const p of sortedPred) {
+      let bestIou = 0, bestIdx = -1;
+      gt.forEach((g, idx) => {
+        if (matched.has(idx)) return;
+        const iouVal = calculateIoU(p.bbox, g.bbox);
+        if (iouVal > bestIou) { bestIou = iouVal; bestIdx = idx; }
+      });
+      if (bestIou >= iou && bestIdx >= 0) { tp++; matched.add(bestIdx); }
+      else { fp++; }
+    }
+    return { tp, fp, gt: gt.length };
+  }
+
+  // 테이블 렌더링
   return (
-    <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50 max-h-80 overflow-y-auto">
-      <div className="text-sm font-semibold mb-2">Instance Visibility</div>
-      
-      {/* GT Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('gt')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('gt') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
-            onChange={() => toggleAllInGroup('gt')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-green-700">GT ({Array.from(groupedAnns.gtByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('gt') && Array.from(groupedAnns.gtByCategory.entries()).map(([cat, anns]) => (
-          <div key={`gt-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`gt-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`gt-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
-                onChange={() => toggleAllInGroup('gt', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`gt-cat-${cat}`) && anns.map(ann => (
-              <div key={`gt-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`gt-${ann.id}`)}
-                  onChange={() => toggleInstance(`gt-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      
-      {/* Pred Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('pred')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('pred') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
-            onChange={() => toggleAllInGroup('pred')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-orange-600">Pred ({Array.from(groupedAnns.predByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('pred') && Array.from(groupedAnns.predByCategory.entries()).map(([cat, anns]) => (
-          <div key={`pred-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`pred-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`pred-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
-                onChange={() => toggleAllInGroup('pred', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`pred-cat-${cat}`) && anns.map(ann => (
-              <div key={`pred-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`pred-${ann.id}`)}
-                  onChange={() => toggleInstance(`pred-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id} (conf: {(ann.conf || 0).toFixed(2)})</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
+    <div className="overflow-x-auto max-h-80">
+      <table className="min-w-full text-xs border-collapse">
+        <thead>
+          <tr className="bg-gray-50">
+            <th className="px-2 py-1 font-normal"> </th>
+            <th className="px-2 py-1 font-normal text-left">Class</th>
+            <th className="px-2 py-1 font-normal">GT</th>
+            <th className="px-2 py-1 font-normal">TP</th>
+            <th className="px-2 py-1 font-normal">FP</th>
+            <th className="px-2 py-1 font-normal"> </th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(groupedAnns).map(([cat, {gt, pred}]) => {
+            const stats = getStats(gt, pred);
+            const catId = Number(cat);
+            const catName = getCategoryNameById(catId) || `Category ${catId}`;
+            // 체크박스: 해당 클래스 GT/Pred 모두 visibleInstances에 있으면 체크
+            const allVisible = gt.concat(pred).every(a => visibleInstances?.has(`${a.conf != null ? 'pred' : 'gt'}-${a.id}`));
+            return (
+              <tr key={catId} className="border-b last:border-b-0">
+                <td className="px-2 py-1 text-center">
+                  <input
+                    type="checkbox"
+                    checked={allVisible}
+                    onChange={e => {
+                      // 체크박스 상태에 따라 전체 on/off
+                      if (e.target.checked) {
+                        gt.forEach(a => !visibleInstances?.has(`gt-${a.id}`) && toggleInstance(`gt-${a.id}`));
+                        pred.forEach(a => !visibleInstances?.has(`pred-${a.id}`) && toggleInstance(`pred-${a.id}`));
+                      } else {
+                        gt.forEach(a => visibleInstances?.has(`gt-${a.id}`) && toggleInstance(`gt-${a.id}`));
+                        pred.forEach(a => visibleInstances?.has(`pred-${a.id}`) && toggleInstance(`pred-${a.id}`));
+                      }
+                    }}
+                    className="w-4 h-4"
+                  />
+                </td>
+                <td className="px-2 py-1 text-left">{catName}</td>
+                <td className="px-2 py-1 text-center text-green-700">{stats.gt}</td>
+                <td className="px-2 py-1 text-center text-blue-700">{stats.tp}</td>
+                <td className="px-2 py-1 text-center text-red-700">{stats.fp}</td>
+                <td className="px-2 py-1 text-center">
+                  <input
+                    type="radio"
+                    name="prcurve-class"
+                    checked={selectedPrCurveCat === catId}
+                    onChange={() => setSelectedPrCurveCat && setSelectedPrCurveCat(catId)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

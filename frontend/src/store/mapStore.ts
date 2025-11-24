@@ -128,10 +128,18 @@ export const useMapStore = create<MapState>((set, get) => ({
   predAnnotationId: null,
   
   // Instance visibility (all visible by default)
-  visibleInstances: new Set<string>(),
+  visibleInstances: undefined,
   setVisibleInstances: (instances) => set(state => ({
-    visibleInstances: typeof instances === 'function' ? instances(state.visibleInstances) : instances
+    visibleInstances: typeof instances === 'function' ? instances(state.visibleInstances ?? new Set<string>()) : instances
   })),
+
+  syncVisibleInstances: () => {
+    const state = get();
+    const all = new Set<string>();
+    state.gtAnnotations.forEach(a => all.add(`gt-${a.id}`));
+    state.predAnnotations.forEach(a => all.add(`pred-${a.id}`));
+    set({ visibleInstances: all });
+  },
   
   // Threshold values (matching MOTA mode defaults)
   iou: 0.5,
@@ -158,30 +166,37 @@ export const useMapStore = create<MapState>((set, get) => ({
     return getOrCreateImageUrl(image, index);
   },
   
-  setGT: (anns) => set(state => {
-    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
-    newHistory.push({ type: 'gt', annotations: anns });
-    return {
-      gtAnnotations: anns,
-      editHistory: newHistory,
-      historyIndex: newHistory.length - 1,
-      undoStack: [...state.undoStack, state.gtAnnotations],
-      redoStack: [],
-    };
-  }),
-  
-  setPred: (anns) => set(state => {
-    const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
-    newHistory.push({ type: 'pred', annotations: anns });
-    return {
-      predAnnotations: anns,
-      originalPredAnnotations: anns,  // Store original for reset functionality
-      editHistory: newHistory,
-      historyIndex: newHistory.length - 1,
-      undoStack: [...state.undoStack, state.predAnnotations],
-      redoStack: [],
-    };
-  }),
+  setGT: (anns) => {
+    set(state => {
+      const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+      newHistory.push({ type: 'gt', annotations: anns });
+      return {
+        gtAnnotations: anns,
+        editHistory: newHistory,
+        historyIndex: newHistory.length - 1,
+        undoStack: [...state.undoStack, state.gtAnnotations],
+        redoStack: [],
+      };
+    });
+    // GT가 바뀌면 visibleInstances도 동기화
+    setTimeout(() => { get().syncVisibleInstances(); }, 0);
+  },
+  setPred: (anns) => {
+    set(state => {
+      const newHistory = state.editHistory.slice(0, state.historyIndex + 1);
+      newHistory.push({ type: 'pred', annotations: anns });
+      return {
+        predAnnotations: anns,
+        originalPredAnnotations: anns,  // Store original for reset functionality
+        editHistory: newHistory,
+        historyIndex: newHistory.length - 1,
+        undoStack: [...state.undoStack, state.predAnnotations],
+        redoStack: [],
+      };
+    });
+    // Pred가 바뀌면 visibleInstances도 동기화
+    setTimeout(() => { get().syncVisibleInstances(); }, 0);
+  },
   
   updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => {
     set(state => {

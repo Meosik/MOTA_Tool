@@ -11,6 +11,7 @@ interface SidebarProps {
   folderId?: string | null;
   currentImageId?: number | null;
   onImageSelect?: (imageId: number) => void;
+  selectedPrCurveCat?: number | null;
 }
 
 export default function MapImageSidebar({ 
@@ -41,6 +42,7 @@ export default function MapImageSidebar({
             folderId={folderId}
             currentImageId={currentImageId || null}
             onImageSelect={onImageSelect}
+            selectedPrCurveCat={selectedPrCurveCat}
           />
         </div>
       ) : (
