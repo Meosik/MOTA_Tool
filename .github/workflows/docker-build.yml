@@ -13,11 +13,22 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      IMAGE_BACKEND: ${{ github.repository }}-backend
-      IMAGE_FRONTEND: ${{ github.repository }}-frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Derive lowercase owner & repo
+        id: vars
+        run: |
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          repo_lc="${GITHUB_REPOSITORY##*/}"
+          repo_lc="${repo_lc,,}"
+          # sanitize repo name: replace underscores with hyphens for image clarity
+          repo_lc="${repo_lc//_/ -}"
+          echo "owner=${owner_lc}" >> $GITHUB_OUTPUT
+          echo "repo=${repo_lc}" >> $GITHUB_OUTPUT
+          echo "backend_image=${owner_lc}/${repo_lc}-backend" >> $GITHUB_OUTPUT
+          echo "frontend_image=${owner_lc}/${repo_lc}-frontend" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU (optional for multi-arch)
         uses: docker/setup-qemu-action@v3
@@ -38,7 +49,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
-          tags: ghcr.io/${{ env.IMAGE_BACKEND }}:latest
+          tags: ghcr.io/${{ steps.vars.outputs.backend_image }}:latest
 
       - name: Build frontend image
         uses: docker/build-push-action@v5
@@ -46,9 +57,9 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
-          tags: ghcr.io/${{ env.IMAGE_FRONTEND }}:latest
+          tags: ghcr.io/${{ steps.vars.outputs.frontend_image }}:latest
 
       - name: Summary
         run: |
-          echo "Backend image: ghcr.io/${IMAGE_BACKEND}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "Frontend image: ghcr.io/${IMAGE_FRONTEND}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "Backend image: ghcr.io/${{ steps.vars.outputs.backend_image }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend image: ghcr.io/${{ steps.vars.outputs.frontend_image }}:latest" >> $GITHUB_STEP_SUMMARY
