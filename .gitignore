@@ -13,3 +13,4 @@ appdata/annotations/
 
 # Frontend build artifacts
 frontend/dist/
+# Large image/tar bundles should not be committed

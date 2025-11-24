@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  backend:
+    image: infra-backend:latest
+    env_file: backend.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./appdata:/app/appdata
+    restart: unless-stopped
+  frontend:
+    image: infra-frontend:latest
+    env_file: frontend.env
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped

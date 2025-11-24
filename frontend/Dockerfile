@@ -1,12 +1,8 @@
-FROM node:20-slim
+FROM node:20-alpine
 
 WORKDIR /app
-
-# 의존성 먼저 설치
 COPY package.json package-lock.json* ./
-RUN npm ci --legacy-peer-deps || npm install
-
-# 나머지 코드 복사
+RUN npm ci --omit=dev
 COPY . .
 
 ENV HOST=0.0.0.0
