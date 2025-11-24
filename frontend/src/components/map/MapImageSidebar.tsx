@@ -22,7 +22,8 @@ export default function MapImageSidebar({
   onUploadSuccess,
   folderId,
   currentImageId,
-  onImageSelect
+  onImageSelect,
+  selectedPrCurveCat
 }: SidebarProps) {
   return (
     <aside className="p-2 w-64 border-r flex flex-col gap-3 bg-gray-50 h-full min-h-0">

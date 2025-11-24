@@ -128,7 +128,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   predAnnotationId: null,
   
   // Instance visibility (all visible by default)
-  visibleInstances: undefined,
+  visibleInstances: new Set<string>(),
   setVisibleInstances: (instances) => set(state => ({
     visibleInstances: typeof instances === 'function' ? instances(state.visibleInstances ?? new Set<string>()) : instances
   })),
@@ -178,8 +178,14 @@ export const useMapStore = create<MapState>((set, get) => ({
         redoStack: [],
       };
     });
-    // GT가 바뀌면 visibleInstances도 동기화
-    setTimeout(() => { get().syncVisibleInstances(); }, 0);
+    // GT가 바뀌면 GT+Pred 전체를 visibleInstances에 동기화
+    setTimeout(() => {
+      const state = get();
+      const all = new Set<string>();
+      state.gtAnnotations.forEach(a => all.add(`gt-${a.id}`));
+      state.predAnnotations.forEach(a => all.add(`pred-${a.id}`));
+      set({ visibleInstances: all });
+    }, 0);
   },
   setPred: (anns) => {
     set(state => {
@@ -194,8 +200,14 @@ export const useMapStore = create<MapState>((set, get) => ({
         redoStack: [],
       };
     });
-    // Pred가 바뀌면 visibleInstances도 동기화
-    setTimeout(() => { get().syncVisibleInstances(); }, 0);
+    // Pred가 바뀌면 GT+Pred 전체를 visibleInstances에 동기화
+    setTimeout(() => {
+      const state = get();
+      const all = new Set<string>();
+      state.gtAnnotations.forEach(a => all.add(`gt-${a.id}`));
+      state.predAnnotations.forEach(a => all.add(`pred-${a.id}`));
+      set({ visibleInstances: all });
+    }, 0);
   },
   
   updateAnnotation: (ann: Annotation, type: 'gt' | 'pred') => {
@@ -575,40 +587,13 @@ export const useMapStore = create<MapState>((set, get) => ({
       alert('No predictions to export');
       return;
     }
-    
-    // Helper to calculate IoU
-    const calculateIoU = (box1: [number, number, number, number], box2: [number, number, number, number]): number => {
-      const [x1, y1, w1, h1] = box1;
-      const [x2, y2, w2, h2] = box2;
-      const xLeft = Math.max(x1, x2);
-      const yTop = Math.max(y1, y2);
-      const xRight = Math.min(x1 + w1, x2 + w2);
-      const yBottom = Math.min(y1 + h1, y2 + h2);
-      if (xRight < xLeft || yBottom < yTop) return 0.0;
-      const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
-      const unionArea = w1 * h1 + w2 * h2 - intersectionArea;
-      return unionArea > 0 ? intersectionArea / unionArea : 0.0;
-    };
-    
-    // Filter predictions by confidence threshold and IoU threshold with GT
-    const filteredPreds = state.predAnnotations.filter(pred => {
-      // Filter by confidence threshold
-      if ((pred.conf || 0) < state.conf) return false;
-      
-      // Filter by IoU threshold - must have IoU >= threshold with at least one GT box
-      if (state.iou > 0 && state.gtAnnotations.length > 0) {
-        const gtForImage = state.gtAnnotations.filter(gt => 
-          !gt.image_id || gt.image_id === pred.image_id
-        );
-        
-        if (gtForImage.length > 0) {
-          const maxIoU = Math.max(...gtForImage.map(gt => calculateIoU(pred.bbox, gt.bbox)));
-          if (maxIoU < state.iou) return false;
-        }
-      }
-      
-      return true;
-    });
+    // EXPORT POLICY (MAP mode):
+    // 1. Apply confidence threshold ONLY.
+    // 2. Ignore IoU threshold (used for visualization / TP/FP classification, not filtering output).
+    // 3. Include user edits (predAnnotations already mutated via updateAnnotation).
+    // 4. Preserve original IDs if present; reassign sequential if missing.
+
+    const filteredPreds = state.predAnnotations.filter(pred => (pred.conf || 0) >= state.conf);
     
     if (filteredPreds.length === 0) {
       alert('No predictions pass the current thresholds');
@@ -635,6 +620,6 @@ export const useMapStore = create<MapState>((set, get) => ({
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     
-    alert(`Filtered predictions exported: ${filteredPreds.length}/${state.predAnnotations.length} annotations (IoU≥${state.iou.toFixed(2)}, Conf≥${state.conf.toFixed(2)})`);
+    alert(`Filtered predictions exported: ${filteredPreds.length}/${state.predAnnotations.length} (Conf≥${state.conf.toFixed(2)}, IoU ignored)`);
   },
 }));
