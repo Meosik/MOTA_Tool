@@ -691,7 +691,7 @@ export default function OverlayCanvas(){
       // 자신이 이미 그 id를 갖고 있는 경우는 위에서 걸러짐, 여기서는 다른 박스 충돌
       let candidate = newId;
       while (used.has(candidate)) candidate++;
-      window.alert(`ID ${newId} 이미 존재하여 ${candidate} 로 자동 재할당되었습니다.`);
+      window.alert(`ID ${newId} already exists; automatically reassigned to ${candidate}.`);
       finalId = candidate;
     }
     useFrameStore.getState().changeOverrideIdWithHistory(

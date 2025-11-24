@@ -365,7 +365,7 @@ export const useMapStore = create<MapState>((set, get) => ({
       });
       
       if (imageFiles.length === 0) {
-        alert('이미지 파일이 없습니다.');
+        alert('No image files found.');
         return;
       }
       
@@ -401,7 +401,7 @@ export const useMapStore = create<MapState>((set, get) => ({
       });
       get().setImages(mapImages);
       const folderId = `local_${Date.now()}`;
-      alert(`이미지 폴더 로드 성공: ${imageFiles.length}개 이미지`);
+      alert(`Image folder loaded: ${imageFiles.length} images`);
       if (cb) cb(folderId);
     };
     input.click();
@@ -463,10 +463,10 @@ export const useMapStore = create<MapState>((set, get) => ({
         // Store annotation ID for future syncing
         set({ gtAnnotationId: annotationId });
         
-        alert(`GT 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
+        alert(`GT loaded: ${annotations.length} annotations (saved to server)`);
         if (cb) cb(annotationId);
       } catch (err) {
-        alert('GT 로드 실패: ' + err);
+        alert('Failed to load GT: ' + err);
         console.error('GT loading error:', err);
       }
     };
@@ -542,10 +542,10 @@ export const useMapStore = create<MapState>((set, get) => ({
         // Store annotation ID for future syncing
         set({ predAnnotationId: annotationId });
         
-        alert(`Predictions 로드 성공: ${annotations.length}개 annotations (서버 저장됨)`);
+        alert(`Predictions loaded: ${annotations.length} annotations (saved to server)`);
         if (cb) cb(annotationId);
       } catch (err) {
-        alert('Predictions 로드 실패: ' + err);
+        alert('Failed to load predictions: ' + err);
         console.error('Predictions loading error:', err);
       }
     };

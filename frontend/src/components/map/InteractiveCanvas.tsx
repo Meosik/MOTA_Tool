@@ -519,7 +519,7 @@ export default function InteractiveCanvas({
   if (!imageUrl) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400">
-        이미지를 선택하세요
+        Select an image
       </div>
     );
   }
@@ -546,7 +546,7 @@ export default function InteractiveCanvas({
           className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
           style={{ left: pickerPosition.x, top: pickerPosition.y }}
         >
-          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
+          <div className="text-sm font-semibold mb-2">Enter category (COCO name)</div>
           <input
             type="text"
             autoFocus
@@ -563,7 +563,7 @@ export default function InteractiveCanvas({
                   handleCategoryChange(categoryId);
                   setShowCategoryPicker(false);
                 } else {
-                  setCategoryErrorMsg(`"${categoryInputValue}"는 COCO 카테고리에 없습니다`);
+                  setCategoryErrorMsg(`"${categoryInputValue}" is not a COCO category`);
                 }
               } else if (e.key === 'Escape') {
                 setShowCategoryPicker(false);
@@ -573,7 +573,7 @@ export default function InteractiveCanvas({
               // Don't auto-submit on blur, just close
               setTimeout(() => setShowCategoryPicker(false), 150);
             }}
-            placeholder="예: person, car, dog"
+            placeholder="e.g. person, car, dog"
           />
           {categoryErrorMsg && (
             <div className="text-xs text-red-500 mt-1">
@@ -581,7 +581,7 @@ export default function InteractiveCanvas({
             </div>
           )}
           <div className="text-xs text-gray-500 mt-1">
-            COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
+            Enter a COCO category name (e.g. person, car, dog)
           </div>
         </div>
       )}

@@ -115,10 +115,10 @@ export default function TopBar() {
 
   return (
     <div className="h-12 flex items-center gap-2 px-3 border-b bg-white text-sm">
-      {/* 좌측: 모드 전환 드롭다운 + 버튼 */}
+      {/* Left: mode switch dropdown + buttons */}
       <div className="flex items-center gap-2">
         <select
-          aria-label="모드 전환"
+          aria-label="Switch mode"
           value={mode}
           onChange={e => setMode(e.target.value as 'MOTA' | 'MAP')}
           className="px-2 py-1.5 rounded border bg-white text-brand-700 font-bold"
@@ -132,14 +132,14 @@ export default function TopBar() {
           className="px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 inline-flex items-center gap-2"
         >
           <FolderOpen size={16} />{' '}
-          {mode === 'MOTA' ? '프레임 폴더 열기' : '이미지/COCO 업로드'}
+          {mode === 'MOTA' ? 'Open Frame Folder' : 'Upload Images/COCO'}
         </button>
         <button
           onClick={handleGTUpload}
           className="px-3 py-1.5 rounded border inline-flex items-center gap-2"
         >
           <Upload size={16} />{' '}
-          {mode === 'MOTA' ? 'GT 불러오기' : 'GT 어노테이션'}
+          {mode === 'MOTA' ? 'Load GT' : 'GT Annotations'}
         </button>
         <div className="flex items-center gap-2">
           <button
@@ -147,16 +147,16 @@ export default function TopBar() {
             className="px-3 py-1.5 rounded border inline-flex items-center gap-2"
           >
             <Upload size={16} />{' '}
-            {mode === 'MOTA' ? 'Pred 불러오기' : 'Pred 어노테이션'}
+            {mode === 'MOTA' ? 'Load Pred' : 'Pred Annotations'}
           </button>
           {mode === 'MAP' && (
             <button
               onClick={handleOverallMap}
               disabled={!gtAnnId || !predAnnId || overallLoading}
               className="px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-xs"
-              title="전체 데이터셋 mAP 계산"
+              title="Compute overall dataset mAP"
             >
-              {overallLoading ? 'mAP 계산중...' : 'Overall mAP'}
+              {overallLoading ? 'Computing mAP...' : 'Overall mAP'}
             </button>
           )}
           {mode === 'MAP' && overallData && typeof overallData.mAP === 'number' && (
@@ -187,35 +187,35 @@ export default function TopBar() {
       </div>
       <div className="flex-1" />
 
-      {/* 우측: 편집 도구 및 내보내기(모드 관계 없이 항상 표시) */}
+      {/* Right: editing tools & export (shown in all modes) */}
       <div className="flex items-center gap-1">
         <button
           className="px-2 py-1.5 rounded border inline-flex items-center gap-1"
           onClick={handleUndo}
-          title="실행 취소 (Ctrl+Z)"
+          title="Undo (Ctrl+Z)"
         >
           <RotateCcw size={16} /> Undo
         </button>
         <button
           className="px-2 py-1.5 rounded border inline-flex items-center gap-1"
           onClick={handleRedo}
-          title="다시 실행 (Ctrl+Shift+Z)"
+          title="Redo (Ctrl+Shift+Z)"
         >
           <RotateCw size={16} /> Redo
         </button>
         <button
           className="px-2 py-1.5 rounded border inline-flex items-center gap-1"
           onClick={handleResetFrame}
-          title="현재 프레임 수정 리셋"
+          title="Reset current frame edits"
         >
-          <Eraser size={16} /> 프레임 리셋
+          <Eraser size={16} /> Reset Frame
         </button>
         <button
           className="px-3 py-1.5 rounded border inline-flex items-center gap-2"
           onClick={handleExport}
-          title={mode === 'MOTA' ? '수정 포함 전체 내보내기' : '결과 내보내기'}
+          title={mode === 'MOTA' ? 'Export with edits' : 'Export results'}
         >
-          <Download size={16} /> 내보내기
+          <Download size={16} /> Export
         </button>
       </div>
       {/* Dataset metrics modal */}

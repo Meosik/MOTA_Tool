@@ -478,7 +478,7 @@ const useFrameStore = create<State>((set, get) => ({
       fd.append('kind','gt'); fd.append('file', f);
       const base = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8000';
       const r = await fetch(base + '/annotations', { method:'POST', body:fd }).catch(()=>null);
-      if(!r || !r.ok){ alert('GT 업로드 실패'); return; }
+      if(!r || !r.ok){ alert('Failed to upload GT'); return; }
       const js = await r.json();
       set({ gtAnnotationId: js.annotation_id });
     };
@@ -494,7 +494,7 @@ const useFrameStore = create<State>((set, get) => ({
       fd.append('kind','pred'); fd.append('file', f);
       const base = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8000';
       const r = await fetch(base + '/annotations', { method:'POST', body:fd }).catch(()=>null);
-      if(!r || !r.ok){ alert('Pred 업로드 실패'); return; }
+      if(!r || !r.ok){ alert('Failed to upload Pred'); return; }
       const js = await r.json();
       set({ predAnnotationId: js.annotation_id });
     };
@@ -519,7 +519,7 @@ const useFrameStore = create<State>((set, get) => ({
       const ann = id;
       const key = `gt:${ann}:${fr.i}-${fr.i}`;
       if (!inFlight.has(key)) {
-        const p = (async()=>{
+          const p = (async()=>{
           try {
             const data = await fetchTracksWindow(ann, fr.i, fr.i);
             let added = 0;
@@ -933,26 +933,26 @@ const useFrameStore = create<State>((set, get) => ({
   exportTotal: 0,
   exportMessage: '',
   cancelExport: ()=>{
-    set({ exportActive: false, exportMessage: '취소됨' });
+    set({ exportActive: false, exportMessage: 'Cancelled' });
   },
 
   exportModifiedPred: async ()=>{
     const predAnnId = get().predAnnotationId;
-    if (!predAnnId) { alert('Pred 파일을 먼저 불러오세요'); return; }
+    if (!predAnnId) { alert('Load a prediction file first'); return; }
     const frameObjs = get().frames.slice();
-    if (!frameObjs.length) { alert('프레임이 없습니다'); return; }
-    set({ exportActive: true, exportProgress: 0, exportTotal: frameObjs.length, exportMessage: '전체 트랙 준비 중' });
+    if (!frameObjs.length) { alert('No frames available'); return; }
+    set({ exportActive: true, exportProgress: 0, exportTotal: frameObjs.length, exportMessage: 'Preparing all tracks' });
     if (!get().allTracksLoaded) {
-      set({ exportMessage: '전체 트랙 선로딩 중...' });
+      set({ exportMessage: 'Preloading all tracks...' });
       await get().preloadAllBoxes().catch(()=>{});
     }
     const orderedFrames = frameObjs.map(f=>f.i).sort((a,b)=>a-b);
     const overrides = get().overrides;
     const lines: string[] = [];
     for (let idx=0; idx<orderedFrames.length; idx++) {
-      if (!get().exportActive) return; // 취소됨
+      if (!get().exportActive) return; // cancelled
       const fnum = orderedFrames[idx];
-      set({ exportProgress: idx, exportMessage: `프레임 ${fnum} 처리 중 (${idx+1}/${orderedFrames.length})` });
+      set({ exportProgress: idx, exportMessage: `Processing frame ${fnum} (${idx+1}/${orderedFrames.length})` });
       const key = `${predAnnId}:${fnum}`;
       if (!prCache.get(key)) {
         await get().fetchSingleFrameBoxes('pred', fnum).catch(()=>{});
@@ -976,7 +976,7 @@ const useFrameStore = create<State>((set, get) => ({
         }
       }
     }
-    set({ exportMessage: '파일 생성 중...' });
+    set({ exportMessage: 'Creating file...' });
     const content = lines.join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -987,7 +987,7 @@ const useFrameStore = create<State>((set, get) => ({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    set({ exportActive: false, exportProgress: orderedFrames.length, exportMessage: '완료' });
+    set({ exportActive: false, exportProgress: orderedFrames.length, exportMessage: 'Done' });
   },
 
   // (로컬 스캔 제거됨) - 서버 override 평가로 대체
