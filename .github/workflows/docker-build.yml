@@ -24,7 +24,9 @@ jobs:
           repo_lc="${GITHUB_REPOSITORY##*/}"
           repo_lc="${repo_lc,,}"
           # sanitize repo name: replace underscores with hyphens for image clarity
-          repo_lc="${repo_lc//_/ -}"
+          repo_lc="${repo_lc//_/-}"
+          # ensure only allowed characters (a-z0-9-_.) - remove spaces just in case
+          repo_lc="$(echo "$repo_lc" | sed 's/[^a-z0-9_.-]/-/g')"
           echo "owner=${owner_lc}" >> $GITHUB_OUTPUT
           echo "repo=${repo_lc}" >> $GITHUB_OUTPUT
           echo "backend_image=${owner_lc}/${repo_lc}-backend" >> $GITHUB_OUTPUT
