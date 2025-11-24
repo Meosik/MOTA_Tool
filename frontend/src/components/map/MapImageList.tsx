@@ -286,7 +286,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect, 
   if (!folderId) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        TopBar에서 이미지 폴더를 업로드하세요
+        Please upload an image folder in the TopBar
       </div>
     );
   }
@@ -294,7 +294,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect, 
   if (images.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        이미지 로딩 중...
+        Loading images...
       </div>
     );
   }
@@ -303,7 +303,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect, 
   return (
     <div className="h-full flex flex-col">
       <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
-        <span>이미지 목록 ({images.length}개)</span>
+        <span>Image List ({images.length} items)</span>
       </div>
       <div 
         ref={scrollContainerRef}

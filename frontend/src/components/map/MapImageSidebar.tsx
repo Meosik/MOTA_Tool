@@ -31,7 +31,7 @@ export default function MapImageSidebar({
         <div className="font-bold">Images</div>
         {!folderId && (
           <div className="text-xs text-gray-500 py-2">
-            TopBar에서 이미지 폴더를 업로드하세요
+            Please upload an image folder in the TopBar
           </div>
         )}
       </div>

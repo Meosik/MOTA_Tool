@@ -109,7 +109,7 @@ export default function LeftPanel(){
     } catch(e) {
       console.warn('scanServer failed', e)
       if (e instanceof TypeError) {
-        console.warn('[Hint] CORS 가능성: front host=' + window.location.host + ' / attempted base URL 재확인 필요')
+        console.warn('[Hint] Possible CORS issue: front host=' + window.location.host + ' / attempted base URL needs rechecking')
       }
     }
   }
@@ -125,12 +125,12 @@ export default function LeftPanel(){
         <button
           onClick={()=>{ scanServer(); }}
           className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-          title="서버(override 반영) 스캔"
+          title="Scan server (with override applied)"
         >
-          스캔
+          Scan
         </button>
         <div className="ml-auto text-xs text-gray-500">
-          {idswFrames.length}개
+          {idswFrames.length} frames
         </div>
       </div>
 
@@ -152,7 +152,7 @@ export default function LeftPanel(){
       {/* List (max 10 / page) */}
       <div className="p-2 overflow-auto space-y-2">
         {pageItems.length === 0 && (
-          <div className="text-xs text-gray-500">IDSW 프레임이 없습니다. 스캔을 눌러 탐색하세요.</div>
+          <div className="text-xs text-gray-500">No IDSW frames. Press Scan to explore.</div>
         )}
         {pageItems.map(item => {
           const idx = frames.findIndex(f=>f.i===item.f)
@@ -162,7 +162,7 @@ export default function LeftPanel(){
               key={item.f}
               className="w-full flex items-center gap-2 text-left hover:bg-gray-50 p-1 rounded border"
               onClick={()=> { if (idx>=0) setCur(idx) }}
-              title={`프레임 ${item.f}로 이동`}
+              title={`Jump to frame ${item.f}`}
             >
               {url ? (
                 <img src={url} className="w-16 h-10 object-cover rounded" loading="lazy" />

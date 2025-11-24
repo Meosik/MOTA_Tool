@@ -93,14 +93,14 @@ export default function DatasetMetricsModal({ open, onClose, overallLoading, ove
     return (
       <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40">
         <div className="w-[460px] bg-white rounded shadow-lg p-6 space-y-4">
-          <div className="text-lg font-semibold">전체 mAP 계산 중</div>
-          <div className="text-sm text-gray-700">{overallLoading? '백엔드에서 mAP 수집 중...' : '클래스별 통계 계산 중...'}</div>
+          <div className="text-lg font-semibold">Overall mAP Calculation</div>
+          <div className="text-sm text-gray-700">{overallLoading? 'Collecting mAP from backend...' : 'Calculating per-class statistics...'}</div>
           <div className="h-3 w-full rounded bg-gray-200 overflow-hidden">
             <div className="h-full bg-brand-600" style={{ width: overallLoading? '40%' : pct+'%' }} />
           </div>
-          <div className="text-xs text-gray-600">{overallLoading? '서버 응답 대기' : `${pct}% (${progressIdx}/${totalCats})`}</div>
+          <div className="text-xs text-gray-600">{overallLoading? 'Waiting for server response' : `${pct}% (${progressIdx}/${totalCats})`}</div>
           <div className="flex justify-end">
-            <button onClick={onClose} className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">닫기</button>
+            <button onClick={onClose} className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">Close</button>
           </div>
         </div>
       </div>
@@ -118,7 +118,7 @@ export default function DatasetMetricsModal({ open, onClose, overallLoading, ove
         {/* Left: table */}
         <div className="flex-1 overflow-auto">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-lg font-semibold">데이터셋 클래스 통계</div>
+            <div className="text-lg font-semibold">Dataset Class Statistics</div>
             <div className="text-sm text-gray-600">Overall mAP: {overallMap!=null ? (overallMap*100).toFixed(2)+'%' : '—'}</div>
           </div>
           <table className="min-w-full text-xs border-collapse">
@@ -173,7 +173,7 @@ export default function DatasetMetricsModal({ open, onClose, overallLoading, ove
             <text x={16} y={pad+ch/2} fontSize={11} textAnchor="middle" fill="#374151" transform={`rotate(-90, 16, ${pad+ch/2})`}>Precision</text>
           </svg>
           <div className="mt-3 flex justify-end">
-            <button onClick={onClose} className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">닫기</button>
+            <button onClick={onClose} className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">Close</button>
           </div>
         </div>
       </div>

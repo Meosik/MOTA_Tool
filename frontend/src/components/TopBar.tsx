@@ -132,14 +132,14 @@ export default function TopBar() {
           className="px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 inline-flex items-center gap-2"
         >
           <FolderOpen size={16} />{' '}
-          {mode === 'MOTA' ? 'Open Frame Folder' : 'Upload Images/COCO'}
+          {mode === 'MOTA' ? 'Open Frame Folder' : 'Open Image Folder'}
         </button>
         <button
           onClick={handleGTUpload}
           className="px-3 py-1.5 rounded border inline-flex items-center gap-2"
         >
           <Upload size={16} />{' '}
-          {mode === 'MOTA' ? 'Load GT' : 'GT Annotations'}
+          {mode === 'MOTA' ? 'Load GT' : 'Load GT'}
         </button>
         <div className="flex items-center gap-2">
           <button
@@ -147,7 +147,7 @@ export default function TopBar() {
             className="px-3 py-1.5 rounded border inline-flex items-center gap-2"
           >
             <Upload size={16} />{' '}
-            {mode === 'MOTA' ? 'Load Pred' : 'Pred Annotations'}
+            {mode === 'MOTA' ? 'Load Pred' : 'Load Pred'}
           </button>
           {mode === 'MAP' && (
             <button

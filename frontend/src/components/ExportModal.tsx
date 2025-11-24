@@ -14,7 +14,7 @@ export default function ExportModal(){
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40">
       <div className="w-[420px] bg-white rounded shadow-lg p-5 space-y-4">
-        <div className="text-lg font-semibold">내보내기 진행 중</div>
+        <div className="text-lg font-semibold">Export in Progress</div>
         <div className="text-sm text-gray-700 break-words">{exportMessage}</div>
         <div className="h-3 w-full rounded bg-gray-200 overflow-hidden">
           <div className="h-full bg-brand-600" style={{ width: pct + '%' }} />
@@ -24,7 +24,7 @@ export default function ExportModal(){
           <button
             onClick={cancelExport}
             className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
-          >취소</button>
+          >Cancel</button>
         </div>
       </div>
     </div>

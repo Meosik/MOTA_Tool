@@ -55,7 +55,7 @@ export default function CollapseBoundaryToggle({ collapsed, onToggle, expandedOf
         padding: 0,
         cursor: 'pointer',
       }}
-      aria-label={collapsed ? '이미지/네비게이션 펼치기' : '이미지/네비게이션 접기'}
+      aria-label={collapsed ? 'Image/Navigation Expand' : 'Image/Navigation Collapse'}
     >
       <Icon className="w-6 h-6" />
     </button>
