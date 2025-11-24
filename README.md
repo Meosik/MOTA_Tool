@@ -312,11 +312,6 @@ A: Not simultaneously; load one GT and one prediction set per session. Re-upload
 **Q: Why is overall mAP not changing after slider move?**  
 A: It is snapshot-based. Re-run the Overall mAP button to capture new thresholds.
 
-## Related Documentation
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [MAP_MODE_INTEGRATION.md](MAP_MODE_INTEGRATION.md)
-- [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
-
 ## License / Usage
 This project is released under the MIT License. See `LICENSE` file for full text.
 
