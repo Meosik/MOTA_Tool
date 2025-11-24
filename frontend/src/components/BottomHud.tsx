@@ -199,7 +199,7 @@ export default function BottomHud() {
           <div className="bg-white rounded-lg shadow-xl p-6 min-w-[300px]">
             <div className="flex items-center gap-3 mb-4">
               <Loader2 className="animate-spin" size={24} />
-              <h3 className="text-lg font-semibold">프레임 로딩 중...</h3>
+              <h3 className="text-lg font-semibold">Frame Loading...</h3>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
               <div 
@@ -226,7 +226,7 @@ export default function BottomHud() {
         className="p-1.5 rounded-full border hover:bg-gray-50 disabled:opacity-40"
         onClick={goPrev}
         disabled={!canPrev || isPlaying}
-        title="이전 프레임"
+        title="Previous Frame"
       >
         <ChevronLeft size={18}/>
       </button>
@@ -251,7 +251,7 @@ export default function BottomHud() {
           <span
             onClick={startEdit}
             className="font-semibold cursor-text hover:bg-gray-100 rounded px-1 py-0.5"
-            title="클릭하여 이동"
+            title="Click to jump"
           >
             {currentFrameNum}
           </span>
@@ -287,7 +287,7 @@ export default function BottomHud() {
         className="p-1.5 rounded-full border hover:bg-gray-50 bg-blue-50 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
         onClick={togglePlay}
         disabled={isPreloading}
-        title={isPlaying ? '일시정지' : (isPreloading ? '로딩 중...' : '재생')}
+        title={isPlaying ? 'Pause' : (isPreloading ? 'Loading...' : 'Play')}
       >
         {isPreloading ? <Loader2 className="animate-spin" size={18}/> : (isPlaying ? <Pause size={18}/> : <Play size={18}/>)}
       </button>
@@ -297,7 +297,7 @@ export default function BottomHud() {
         className="p-1.5 rounded-full border hover:bg-gray-50 disabled:opacity-40"
         onClick={goNext}
         disabled={!canNext || isPlaying}
-        title="다음 프레임"
+        title="Next Frame"
       >
         <ChevronRight size={18}/>
       </button>

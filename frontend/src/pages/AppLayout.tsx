@@ -5,6 +5,8 @@ import RightPanel from '../components/RightPanel'
 import ExportModal from '../components/ExportModal'
 import useFrameStore from '../store/frameStore'
 import BottomHud from '../components/BottomHud'
+import CollapseBoundaryToggle from '../components/CollapseBoundaryToggle'
+import { useUIStore } from '../store/uiStore'
 
 function KeyboardShortcuts() {
   const undo = useFrameStore(s => s.undo)
@@ -32,14 +34,23 @@ function KeyboardShortcuts() {
 }
 
 export default function AppLayout() {
+  const motaLeftCollapsed = useUIStore(s=>s.motaLeftCollapsed)
+  const setMotaLeftCollapsed = useUIStore(s=>s.setMotaLeftCollapsed)
+  const leftWidthPx = 256; // 16rem
   return (
-    <div className="w-screen h-screen flex flex-col bg-white">
+    <div className="w-screen h-screen flex flex-col bg-white relative">
       {/* TopBar는 상위 컴포넌트에서만 렌더합니다! */}
-      <div className="flex-1 grid grid-cols-[16rem_1fr_20rem] min-h-0">
-        <LeftPanel />
-        <div className="min-h-0 min-w-0">
-          <OverlayCanvas />
+      <div className={`flex-1 min-h-0 ${motaLeftCollapsed ? 'grid grid-cols-[1fr_20rem]' : 'grid grid-cols-[16rem_1fr_20rem]'} transition-[grid-template-columns] duration-200`}>
+        {!motaLeftCollapsed && <LeftPanel />}
+        <div className="min-h-0 min-w-0 relative">
+          {/* 패널 접힘 상태가 바뀔 때마다 OverlayCanvas를 remount하여 layout 강제 갱신 */}
+          <OverlayCanvas key={motaLeftCollapsed ? 'collapsed' : 'expanded'} />
           <BottomHud />
+          <CollapseBoundaryToggle
+            collapsed={motaLeftCollapsed}
+            onToggle={()=> setMotaLeftCollapsed(!motaLeftCollapsed)}
+            expandedOffsetPx={leftWidthPx}
+          />
         </div>
         <RightPanel />
       </div>

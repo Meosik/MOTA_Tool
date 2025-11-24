@@ -71,51 +71,51 @@ interface MapControlPanelProps {
   annotationId: string | null;
   gtId?: string | null;
   predId?: string | null;
+  selectedPrCurveCat?: number | null;
+  setSelectedPrCurveCat?: (cat: number | null) => void;
 }
 
 // Hierarchical Instance Panel Component
-function InstancePanel({ currentImage, gtAnnotations, predAnnotations }: {
+function InstancePanel(props: {
   currentImage: any;
   gtAnnotations: any[];
   predAnnotations: any[];
+  selectedPrCurveCat?: number | null;
+  setSelectedPrCurveCat?: (cat: number | null) => void;
+  imageMap?: number; // overall current image AP
 }) {
+  const { currentImage, gtAnnotations, predAnnotations, selectedPrCurveCat, setSelectedPrCurveCat, imageMap } = props;
   const visibleInstances = useMapStore(s => s.visibleInstances);
   const setVisibleInstances = useMapStore(s => s.setVisibleInstances);
+  // GT/Pred/이미지 변경 시 visibleInstances를 GT+Pred 전체로 직접 세팅
+  React.useEffect(() => {
+    const all = new Set<string>();
+    gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id).forEach(a => all.add(`gt-${a.id}`));
+    predAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id).forEach(a => all.add(`pred-${a.id}`));
+    setVisibleInstances(all);
+  }, [currentImage?.id, gtAnnotations, predAnnotations, setVisibleInstances]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['gt', 'pred']));
   
-  // Initialize all instances as visible when image changes
-  React.useEffect(() => {
-    const allIds = new Set<string>();
-    gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`gt-${a.id}`);
-    });
-    predAnnotations.filter(a => !a.image_id || a.image_id === currentImage.id).forEach(a => {
-      allIds.add(`pred-${a.id}`);
-    });
-    setVisibleInstances(allIds);
-  }, [currentImage?.id, gtAnnotations, predAnnotations, setVisibleInstances]);
+
   
-  // Group annotations by type and category
-  const groupedAnns = React.useMemo(() => {
-    const gtForImage = gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
-    const predForImage = predAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
-    
-    const gtByCategory = new Map<number, any[]>();
-    gtForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!gtByCategory.has(cat)) gtByCategory.set(cat, []);
-      gtByCategory.get(cat)!.push(ann);
-    });
-    
-    const predByCategory = new Map<number, any[]>();
-    predForImage.forEach(ann => {
-      const cat = ann.category || 0;
-      if (!predByCategory.has(cat)) predByCategory.set(cat, []);
-      predByCategory.get(cat)!.push(ann);
-    });
-    
-    return { gtByCategory, predByCategory };
-  }, [currentImage?.id, gtAnnotations, predAnnotations]);
+    // Group annotations by category (for table)
+    const groupedAnns = React.useMemo(() => {
+      const gtForImage = gtAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
+      const predForImage = predAnnotations.filter(a => !a.image_id || a.image_id === currentImage?.id);
+      // GT/Pred의 모든 카테고리 합집합
+      const cats = new Set<number>([...gtForImage.map(a => a.category), ...predForImage.map(a => a.category)]);
+      const byCat: { [cat: number]: { gt: any[]; pred: any[] } } = {};
+      cats.forEach(cat => {
+        byCat[cat] = {
+          gt: gtForImage.filter(a => a.category === cat),
+          pred: predForImage.filter(a => a.category === cat),
+        };
+      });
+      return byCat;
+    }, [currentImage?.id, gtAnnotations, predAnnotations]);
+
+    // 클래스별 PR-curve radio state (상위에서 내려받음)
+    // 이미 props 구조분해에서 selectedPrCurveCat, setSelectedPrCurveCat 선언됨 (중복 제거)
   
   const toggleGroup = (groupId: string) => {
     setExpandedGroups(prev => {
@@ -150,105 +150,135 @@ function InstancePanel({ currentImage, gtAnnotations, predAnnotations }: {
   };
   
   if (!currentImage) return null;
-  
+
+  // IoU threshold (store에서)
+  const iou = useMapStore(s => s.iou);
+  const confThr = useMapStore(s => s.conf);
+
+  // 클래스별 TP/FP 계산
+  function getStats(gt: any[], pred: any[]): {tp: number, fp: number, gt: number} {
+    let tp = 0, fp = 0;
+    const matched = new Set<number>();
+    const sortedPred = [...pred].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+    for (const p of sortedPred) {
+      let bestIou = 0, bestIdx = -1;
+      gt.forEach((g, idx) => {
+        if (matched.has(idx)) return;
+        const iouVal = calculateIoU(p.bbox, g.bbox);
+        if (iouVal > bestIou) { bestIou = iouVal; bestIdx = idx; }
+      });
+      if (bestIou >= iou && bestIdx >= 0) { tp++; matched.add(bestIdx); }
+      else { fp++; }
+    }
+    return { tp, fp, gt: gt.length };
+  }
+
+  // 테이블 렌더링
   return (
-    <div className="space-y-1 border border-neutral-200 rounded p-2 bg-neutral-50 max-h-80 overflow-y-auto">
-      <div className="text-sm font-semibold mb-2">Instance Visibility</div>
-      
-      {/* GT Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('gt')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('gt') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.gtByCategory.values()).flat().every(a => visibleInstances.has(`gt-${a.id}`))}
-            onChange={() => toggleAllInGroup('gt')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-green-700">GT ({Array.from(groupedAnns.gtByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('gt') && Array.from(groupedAnns.gtByCategory.entries()).map(([cat, anns]) => (
-          <div key={`gt-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`gt-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`gt-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`gt-${a.id}`))}
-                onChange={() => toggleAllInGroup('gt', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`gt-cat-${cat}`) && anns.map(ann => (
-              <div key={`gt-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`gt-${ann.id}`)}
-                  onChange={() => toggleInstance(`gt-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      
-      {/* Pred Group */}
-      <div>
-        <div className="flex items-center gap-1 text-xs py-1">
-          <button onClick={() => toggleGroup('pred')} className="text-gray-600 hover:text-gray-900">
-            {expandedGroups.has('pred') ? '▼' : '▶'}
-          </button>
-          <input 
-            type="checkbox" 
-            checked={Array.from(groupedAnns.predByCategory.values()).flat().every(a => visibleInstances.has(`pred-${a.id}`))}
-            onChange={() => toggleAllInGroup('pred')}
-            className="w-3 h-3"
-          />
-          <span className="font-medium text-orange-600">Pred ({Array.from(groupedAnns.predByCategory.values()).flat().length})</span>
-        </div>
-        
-        {expandedGroups.has('pred') && Array.from(groupedAnns.predByCategory.entries()).map(([cat, anns]) => (
-          <div key={`pred-cat-${cat}`} className="ml-3">
-            <div className="flex items-center gap-1 text-xs py-0.5">
-              <button onClick={() => toggleGroup(`pred-cat-${cat}`)} className="text-gray-500 hover:text-gray-800">
-                {expandedGroups.has(`pred-cat-${cat}`) ? '▼' : '▶'}
-              </button>
-              <input 
-                type="checkbox" 
-                checked={anns.every(a => visibleInstances.has(`pred-${a.id}`))}
-                onChange={() => toggleAllInGroup('pred', cat)}
-                className="w-3 h-3"
-              />
-              <span className="text-gray-600">{getCategoryNameById(cat) || `Category ${cat}`} ({anns.length})</span>
-            </div>
-            
-            {expandedGroups.has(`pred-cat-${cat}`) && anns.map(ann => (
-              <div key={`pred-${ann.id}`} className="ml-6 flex items-center gap-1 text-xs py-0.5">
-                <input 
-                  type="checkbox" 
-                  checked={visibleInstances.has(`pred-${ann.id}`)}
-                  onChange={() => toggleInstance(`pred-${ann.id}`)}
-                  className="w-3 h-3"
-                />
-                <span className="text-gray-500">ID: {ann.id} (conf: {(ann.conf || 0).toFixed(2)})</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
+    <div className="overflow-x-auto max-h-80">
+      <table className="min-w-full text-xs border-collapse">
+        <thead>
+          <tr className="bg-gray-50">
+            <th className="px-2 py-1 font-normal"> </th>
+            <th className="px-2 py-1 font-normal text-left">Class</th>
+            <th className="px-2 py-1 font-normal">GT</th>
+            <th className="px-2 py-1 font-normal">TP</th>
+            <th className="px-2 py-1 font-normal">FP</th>
+            <th className="px-2 py-1 font-normal">AP</th>
+            <th className="px-2 py-1 font-normal"> </th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(groupedAnns).map(([cat, {gt, pred}]) => {
+            // Confidence threshold 적용 (COCO 시각화용; 공식 AP는 전체 활용)
+            const filteredPred = pred.filter(p => (p.conf ?? 0) >= confThr);
+            const stats = getStats(gt, filteredPred);
+            const catId = Number(cat);
+            const catName = getCategoryNameById(catId) || `Category ${catId}`;
+            // conf 존재 여부로 pred/gt 구분하던 오류 제거 (GT도 conf=1.0이라 잘못 pred로 분류됨)
+            const allGtVisible = gt.every(a => visibleInstances.has(`gt-${a.id}`));
+            const allPredVisible = pred.every(a => visibleInstances.has(`pred-${a.id}`)); // toggle는 원본 기준
+            // 초기 렌더에서 visibleInstances가 아직 채워지지 않았다면 체크된 상태로 표시
+            const allVisible = (visibleInstances.size === 0)
+              ? true
+              : (allGtVisible && allPredVisible);
+            return (
+              <tr key={catId} className="border-b last:border-b-0">
+                <td className="px-2 py-1 text-center">
+                  <input
+                    type="checkbox"
+                    checked={allVisible}
+                    onChange={e => {
+                      // 체크박스 상태에 따라 전체 on/off
+                      setVisibleInstances(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) {
+                          gt.forEach(a => next.add(`gt-${a.id}`));
+                          pred.forEach(a => next.add(`pred-${a.id}`));
+                        } else {
+                          gt.forEach(a => next.delete(`gt-${a.id}`));
+                          pred.forEach(a => next.delete(`pred-${a.id}`));
+                        }
+                        return next;
+                      });
+                    }}
+                    className="w-4 h-4"
+                  />
+                </td>
+                <td className="px-2 py-1 text-left">{catName}</td>
+                <td className="px-2 py-1 text-center text-green-700">{stats.gt}</td>
+                <td className="px-2 py-1 text-center text-blue-700">{stats.tp}</td>
+                <td className="px-2 py-1 text-center text-red-700">{stats.fp}</td>
+                <td className="px-2 py-1 text-center text-purple-700">
+                  {(() => {
+                    // 101-point interpolated AP per class (unfiltered or filteredPred?) use filteredPred for visual consistency
+                    if (gt.length === 0) return '—';
+                    const predsSorted = [...filteredPred].sort((a,b)=>(b.conf||0)-(a.conf||0));
+                    let tp=0, fp=0; const matched=new Set<number>();
+                    const precisions:number[]=[]; const recalls:number[]=[];
+                    predsSorted.forEach(p=>{
+                      let bestIou=0, bestIdx=-1;
+                      gt.forEach((g,i)=>{ if(matched.has(i)) return; const iou=calculateIoU(p.bbox,g.bbox); if(iou>bestIou){bestIou=iou;bestIdx=i;} });
+                      if(bestIou>=iou){ tp++; matched.add(bestIdx);} else { fp++; }
+                      precisions.push(tp/(tp+fp)); recalls.push(tp/gt.length);
+                    });
+                    let ap=0; for(let r=0;r<=100;r++){ const thr=r/100; let pMax=0; for(let i=0;i<recalls.length;i++){ if(recalls[i]>=thr) pMax=Math.max(pMax, precisions[i]); } ap+=pMax; }
+                    ap/=101; return (ap*100).toFixed(1)+'%';
+                  })()}
+                </td>
+                <td className="px-2 py-1 text-center">
+                  <input
+                    type="radio"
+                    name="prcurve-class"
+                    checked={selectedPrCurveCat === catId}
+                    onChange={() => setSelectedPrCurveCat && setSelectedPrCurveCat(catId)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+          {imageMap != null && (
+            <tr className="border-t bg-neutral-50">
+              <td />
+              <td className="px-2 py-1 text-left font-semibold">Current Image mAP</td>
+              <td className="px-2 py-1 text-center" colSpan={3}></td>
+              <td className="px-2 py-1 text-center font-mono text-purple-700">{(imageMap * 100).toFixed(2)}%</td>
+              <td />
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-export default function MapControlPanel({ projectId, annotationId, gtId, predId }: MapControlPanelProps) {
+export default function MapControlPanel({
+  projectId, annotationId, gtId, predId,
+  selectedPrCurveCat, setSelectedPrCurveCat
+}: MapControlPanelProps & {
+  selectedPrCurveCat?: number | null;
+  setSelectedPrCurveCat?: (cat: number | null) => void;
+}) {
   // Read thresholds from store (like MOTA mode's RightPanel)
   const iou = useMapStore(s => s.iou);
   const conf = useMapStore(s => s.conf);
@@ -407,74 +437,85 @@ export default function MapControlPanel({ projectId, annotationId, gtId, predId 
         <div className="text-xs text-neutral-600 font-mono">conf ≥ {conf.toFixed(2)}</div>
       </div>
 
-      {/* Instance Visibility Panel */}
-      {currentImage && (
-        <InstancePanel 
-          currentImage={currentImage} 
-          gtAnnotations={gtAnnotations} 
+      {/* Instance Visibility Panel + per-image class stats */}
+      {currentImage && imageStats && (
+        <InstancePanel
+          currentImage={currentImage}
+          gtAnnotations={gtAnnotations}
           predAnnotations={predAnnotations}
+          selectedPrCurveCat={selectedPrCurveCat}
+          setSelectedPrCurveCat={setSelectedPrCurveCat}
+          imageMap={imageStats.mAP}
         />
       )}
 
-      {/* Current Image mAP */}
-      {imageStats && (
-        <div className="space-y-1">
-          <div className="text-sm font-semibold">Current Image mAP</div>
-          <div className="text-2xl font-mono">{(imageStats.mAP * 100).toFixed(2)}%</div>
-          <div className="text-xs text-neutral-600">Average Precision for this image</div>
-        </div>
+      {/* Current image PR Curve (selected class or all) */}
+      {currentImage && (
+        <ImagePRCurve
+          imageId={currentImage.id}
+          gtAnnotations={gtAnnotations}
+          predAnnotations={predAnnotations}
+          selectedCat={selectedPrCurveCat}
+        />
       )}
 
-      {/* Overall Dataset Metrics */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Overall Dataset</div>
-          <button
-            onClick={handleCalculateOverallMap}
-            disabled={!effectiveGtId || !effectivePredId || isLoading}
-            className="px-3 py-1 text-xs rounded bg-brand-600 text-white hover:bg-brand-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-          >
-            {isLoading ? 'Calculating...' : 'Calculate Overall mAP'}
-          </button>
-        </div>
-        
-        {error && (
-          <div className="text-xs text-red-500">Error loading metrics</div>
-        )}
-        
-        {isLoading ? (
-          <div className="text-xs text-neutral-600">Calculating metrics...</div>
-        ) : data ? (
-          <>
-            <div className="text-2xl font-mono">{typeof data.mAP === 'number' ? (data.mAP * 100).toFixed(2) + '%' : '—'}</div>
-            <div className="text-xs text-neutral-600">Mean Average Precision</div>
-
-            {data.class_aps && typeof data.class_aps === 'object' && Object.keys(data.class_aps).length > 0 && (
-              <div className="mt-3 space-y-1">
-                <div className="text-sm font-semibold">Per-Class AP</div>
-                <div className="max-h-48 overflow-y-auto space-y-1">
-                  {Object.entries(data.class_aps).map(([cls, ap]) => (
-                    <div key={cls} className="flex justify-between items-center text-xs">
-                      <span className="text-neutral-700">{cls}</span>
-                      <span className="font-mono text-neutral-600">
-                        {((ap as number) * 100).toFixed(2)}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {data.num_categories !== undefined && (
-              <div className="text-xs text-neutral-600 mt-2">
-                Categories: {data.num_categories} | Images: {data.num_images || 'N/A'}
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="text-xs text-neutral-600">GT와 Predictions를 업로드하고 버튼을 눌러 전체 데이터셋 mAP를 계산하세요.</div>
-        )}
-      </div>
+      {/* Bottom metrics removed per new layout */}
     </aside>
   )
+}
+
+// Extracted PR curve logic for reuse (current image)
+function ImagePRCurve({ imageId, gtAnnotations, predAnnotations, selectedCat }: { imageId: number; gtAnnotations: any[]; predAnnotations: any[]; selectedCat: number | null | undefined }) {
+  const iou = useMapStore(s => s.iou);
+  const conf = useMapStore(s => s.conf);
+  const gtForImage = gtAnnotations.filter(a => a.image_id === imageId && (selectedCat == null || a.category === selectedCat));
+  let predForImage = predAnnotations.filter(a => a.image_id === imageId && (selectedCat == null || a.category === selectedCat));
+  predForImage = predForImage.filter(p => (p.conf ?? 0) >= conf);
+
+  const points = React.useMemo(() => {
+    // Reuse calculation similar to MapImageList (enveloped)
+    if (gtForImage.length === 0 || predForImage.length === 0) return [{ precision: 0, recall: 0 }];
+    const sortedPreds = [...predForImage].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+    let tp = 0, fp = 0; const matched = new Set<number>();
+    const precisions:number[]=[]; const recalls:number[]=[];
+    for (const pred of sortedPreds) {
+      let bestIou = 0, bestIdx = -1;
+      for (let gi=0; gi<gtForImage.length; gi++) { if (matched.has(gi)) continue; const iouV = calculateIoU(pred.bbox, gtForImage[gi].bbox); if (iouV > bestIou) { bestIou = iouV; bestIdx = gi; } }
+      if (bestIou >= iou && bestIdx >= 0) { tp++; matched.add(bestIdx); } else { fp++; }
+      precisions.push(tp/(tp+fp)); recalls.push(tp/gtForImage.length);
+    }
+    const env = [...precisions]; for (let i=env.length-2;i>=0;i--) env[i] = Math.max(env[i], env[i+1]);
+    const out: {precision:number; recall:number}[] = [];
+    let lastR=-1; for (let i=0;i<recalls.length;i++){ if(recalls[i]===lastR) continue; out.push({precision:env[i], recall:recalls[i]}); lastR=recalls[i]; }
+    if (out.length && out[0].recall>0) out.unshift({precision:out[0].precision, recall:0});
+    return out;
+  }, [gtForImage, predForImage, iou]);
+
+  const width=260, height=170, pad=30; const cw=width-2*pad, ch=height-2*pad;
+  const path = points.map((p,i)=>{ const x=pad + p.recall*cw; const y=pad + (1-p.precision)*ch; return `${i?'L':'M'} ${x} ${y}`; }).join(' ');
+
+  return (
+    <div className="mt-2 border rounded bg-gray-50 p-2">
+      <div className="text-xs font-semibold mb-1">PR Curve (Current Image{selectedCat!=null?` · ${getCategoryNameById(selectedCat) || 'Category '+selectedCat}`:''})</div>
+      <svg width={width} height={height} className="bg-white rounded border">
+        {[0,0.25,0.5,0.75,1].map(v=> (
+          <g key={v}>
+            <line x1={pad} y1={pad+(1-v)*ch} x2={pad+cw} y2={pad+(1-v)*ch} stroke="#e5e7eb" />
+            <line x1={pad+v*cw} y1={pad} x2={pad+v*cw} y2={pad+ch} stroke="#e5e7eb" />
+          </g>
+        ))}
+        <line x1={pad} y1={pad} x2={pad} y2={pad+ch} stroke="#374151" strokeWidth={2} />
+        <line x1={pad} y1={pad+ch} x2={pad+cw} y2={pad+ch} stroke="#374151" strokeWidth={2} />
+        <path d={path} fill="none" stroke="#3b82f6" strokeWidth={2} />
+        {[0,0.5,1].map(v=> (
+          <g key={v}>
+            <text x={pad+v*cw} y={pad+ch+12} fontSize={8} textAnchor="middle" fill="#6b7280">{v.toFixed(1)}</text>
+            <text x={pad-5} y={pad+(1-v)*ch+3} fontSize={8} textAnchor="end" fill="#6b7280">{v.toFixed(1)}</text>
+          </g>
+        ))}
+        <text x={pad+cw/2} y={height-5} fontSize={10} textAnchor="middle" fill="#374151">Recall</text>
+        <text x={10} y={pad+ch/2} fontSize={10} textAnchor="middle" fill="#374151" transform={`rotate(-90, 10, ${pad+ch/2})`}>Precision</text>
+      </svg>
+    </div>
+  );
 }

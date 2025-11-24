@@ -45,7 +45,7 @@ type DragState = {
   annotationIndex: number;  // Index in predAnnotations array
   startX: number;
   startY: number;
-  handle: 'move' | ResizeHandle | null;
+  handle: 'move' | ResizeHandle | 'pan' | null;
 };
 
 const CATEGORY_COLORS = [
@@ -68,6 +68,7 @@ export default function InteractiveCanvas({
   const confThr = useMapStore(s => s.conf);
   const visibleInstances = useMapStore(s => s.visibleInstances);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [dragState, setDragState] = useState<DragState>({
@@ -96,22 +97,21 @@ export default function InteractiveCanvas({
 
   const drawAnnotations = useCallback(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
     const img = imageRef.current;
-    
-    if (!canvas || !ctx || !img || !img.complete) {
-      console.log('InteractiveCanvas: Cannot draw -', { 
-        hasCanvas: !!canvas, 
-        hasCtx: !!ctx, 
-        hasImg: !!img, 
-        imgComplete: img?.complete 
-      });
-      return;
+    if (!canvas || !img || !img.complete) return;
+    // Prepare offscreen buffer
+    if (!offscreenRef.current) {
+      offscreenRef.current = document.createElement('canvas');
+      offscreenRef.current.width = canvas.width;
+      offscreenRef.current.height = canvas.height;
+    } else if (offscreenRef.current.width !== canvas.width || offscreenRef.current.height !== canvas.height) {
+      offscreenRef.current.width = canvas.width;
+      offscreenRef.current.height = canvas.height;
     }
-
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
+    const ctx = offscreenRef.current.getContext('2d');
+    if (!ctx) return;
+    // Clear offscreen
+    ctx.clearRect(0, 0, offscreenRef.current.width, offscreenRef.current.height);
     // Draw image
     ctx.save();
     ctx.translate(offset.x, offset.y);
@@ -136,7 +136,7 @@ export default function InteractiveCanvas({
       return visibleCategories.size === 0 || visibleCategories.has(ann.category as any);
     });
 
-    // Filter pred annotations by confidence, IoU, and visibility
+    // Filter pred annotations by confidence and visibility ONLY (IoU not for hiding; used only for TP/FP classification per COCO)
     const filteredPred = predToRender.filter(ann => {
       // Check instance visibility
       if (visibleInstances.size > 0 && !visibleInstances.has(`pred-${ann.id}`)) return false;
@@ -147,74 +147,94 @@ export default function InteractiveCanvas({
       // Check visible categories
       if (visibleCategories.size > 0 && !visibleCategories.has(ann.category as any)) return false;
       
-      // Check IoU threshold - pred must have IoU >= threshold with at least one GT box
-      if (iouThr > 0 && filteredGt.length > 0) {
-        const maxIoU = Math.max(...filteredGt.map(gt => calculateIoU(ann.bbox, gt.bbox)));
-        if (maxIoU < iouThr) return false;
-      }
-      
       return true;
     });
 
-    const allAnnotations = [...filteredGt, ...filteredPred];
-    
-    console.log('InteractiveCanvas: Drawing', { 
-      gtCount: filteredGt.length, 
-      predCount: filteredPred.length,
-      totalAnnotations: allAnnotations.length
+    // Classification for TP/FP relative to filteredGt using IoU threshold (COCO: IoU threshold determines TP vs FP, predictions are still shown)
+    const gtMatched = new Set<number>();
+    const tpPredIds = new Set<number>();
+    filteredPred.forEach(p => {
+      let bestIou = 0; let bestIdx = -1;
+      filteredGt.forEach((g, idx) => {
+        if (gtMatched.has(idx)) return;
+        const iou = calculateIoU(p.bbox as any, g.bbox as any);
+        if (iou > bestIou) { bestIou = iou; bestIdx = idx; }
+      });
+      if (bestIou >= iouThr && bestIdx >= 0) {
+        gtMatched.add(bestIdx);
+        tpPredIds.add(p.id as any);
+      }
     });
+    // Colors aligned with MOTA OverlayCanvas
+    const COLOR_GT_STROKE = 'rgba(80, 220, 120, 0.95)';
+    const COLOR_GT_FILL   = 'rgba(80, 220, 120, 0.18)';
+    const COLOR_TP_STROKE = 'rgba(255, 140, 0, 0.95)';
+    const COLOR_TP_FILL   = 'rgba(255, 140, 0, 0.18)';
+    const COLOR_FP_STROKE = 'rgba(255, 0, 80, 0.95)';
+    const COLOR_FP_FILL   = 'rgba(255, 0, 80, 0.18)';
 
-    allAnnotations.forEach(ann => {
-      const [x, y, w, h] = ann.bbox;
-      const isGt = ann.type === 'gt';
-      const color = getCategoryColor(ann.category as any, isGt);
-      const isSelected = selectedAnnotation?.id === ann.id;
-
-      ctx.save();
-      ctx.translate(offset.x, offset.y);
-      ctx.scale(scale, scale);
-
-      // Draw bbox
-      ctx.strokeStyle = color;
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.strokeRect(x, y, w, h);
-
-      // Fill with transparency
-      ctx.fillStyle = isGt ? 'rgba(34,197,94,0.15)' : 'rgba(99,102,241,0.13)';
-      ctx.fillRect(x, y, w, h);
-
-      // Draw label (category name only, no confidence)
-      if (ann.category !== undefined) {
-        const label = categories[ann.category as any]?.name ?? ann.category ?? '';
-        if (label) {
-          ctx.fillStyle = color;
-          ctx.font = '12px sans-serif';
-          ctx.fillText(String(label), x, y - 4);
-        }
-      }
-
-      // Draw resize handles if selected (8 handles: 4 corners + 4 edges)
-      if (isSelected && !isGt) {
-        const handleSize = 8;
-        const halfHandle = handleSize / 2;
-        ctx.fillStyle = color;
-        
-        // Corner handles
-        ctx.fillRect(x - halfHandle, y - halfHandle, handleSize, handleSize); // Top-left
-        ctx.fillRect(x + w - halfHandle, y - halfHandle, handleSize, handleSize); // Top-right
-        ctx.fillRect(x - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom-left
-        ctx.fillRect(x + w - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom-right
-        
-        // Edge handles
-        ctx.fillRect(x + w/2 - halfHandle, y - halfHandle, handleSize, handleSize); // Top
-        ctx.fillRect(x + w/2 - halfHandle, y + h - halfHandle, handleSize, handleSize); // Bottom
-        ctx.fillRect(x - halfHandle, y + h/2 - halfHandle, handleSize, handleSize); // Left
-        ctx.fillRect(x + w - halfHandle, y + h/2 - halfHandle, handleSize, handleSize); // Right
-      }
-
+    // Draw GT boxes
+    filteredGt.forEach((g, idx) => {
+      const [x,y,w,h] = g.bbox;
+      const matched = gtMatched.has(idx);
+      ctx.save(); ctx.translate(offset.x, offset.y); ctx.scale(scale, scale);
+      ctx.strokeStyle = COLOR_GT_STROKE;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x,y,w,h);
+      ctx.fillStyle = matched ? COLOR_GT_FILL : 'rgba(80,220,120,0.10)';
+      ctx.fillRect(x,y,w,h);
+      const label = categories[g.category as any]?.name ?? g.category;
+      if (label) { ctx.fillStyle = COLOR_GT_STROKE; ctx.font='12px sans-serif'; ctx.fillText(String(label), x, y-4); }
       ctx.restore();
     });
+    // Draw prediction boxes
+    filteredPred.forEach(p => {
+      const [x,y,w,h] = p.bbox;
+      const isTP = tpPredIds.has(p.id as any);
+      const strokeColor = isTP ? COLOR_TP_STROKE : COLOR_FP_STROKE;
+      const fillColor   = isTP ? COLOR_TP_FILL   : COLOR_FP_FILL;
+      const isSelected = selectedAnnotation?.id === p.id;
+      ctx.save(); ctx.translate(offset.x, offset.y); ctx.scale(scale, scale);
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.strokeRect(x,y,w,h);
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(x,y,w,h);
+      const label = categories[p.category as any]?.name ?? p.category;
+      if (label) { ctx.fillStyle = strokeColor; ctx.font='12px sans-serif'; ctx.fillText(String(label), x, y-4); }
+      // Resize handles if selected
+      if (isSelected) {
+        const handleSize = 8; const half = handleSize/2;
+        ctx.fillStyle = strokeColor;
+        ctx.fillRect(x-half, y-half, handleSize, handleSize);
+        ctx.fillRect(x+w-half, y-half, handleSize, handleSize);
+        ctx.fillRect(x-half, y+h-half, handleSize, handleSize);
+        ctx.fillRect(x+w-half, y+h-half, handleSize, handleSize);
+        ctx.fillRect(x+w/2-half, y-half, handleSize, handleSize);
+        ctx.fillRect(x+w/2-half, y+h-half, handleSize, handleSize);
+        ctx.fillRect(x-half, y+h/2-half, handleSize, handleSize);
+        ctx.fillRect(x+w-half, y+h/2-half, handleSize, handleSize);
+      }
+      ctx.restore();
+    });
+    // Blit offscreen to visible to avoid flicker and prevent ghosting
+    const visibleCtx = canvas.getContext('2d');
+    if (visibleCtx && offscreenRef.current) {
+      // Use 'copy' to fully replace previous frame (no transparent ghosting)
+      visibleCtx.save();
+      visibleCtx.globalCompositeOperation = 'copy';
+      visibleCtx.drawImage(offscreenRef.current, 0, 0);
+      visibleCtx.restore();
+    }
   }, [gtAnnotations, predAnnotations, visibleCategories, confThr, iouThr, visibleInstances, scale, offset, selectedAnnotation, categories, dragState]);
+
+  // Debounce rapid slider changes to prevent flicker
+  const redrawPending = useRef<number | null>(null);
+  useEffect(() => {
+    if (redrawPending.current) cancelAnimationFrame(redrawPending.current);
+    redrawPending.current = requestAnimationFrame(() => { drawAnnotations(); });
+    return () => { if (redrawPending.current) cancelAnimationFrame(redrawPending.current); };
+  }, [drawAnnotations]);
 
   useEffect(() => {
     if (!imageUrl) {
@@ -252,9 +272,7 @@ export default function InteractiveCanvas({
     img.src = imageUrl;
   }, [imageUrl]);
 
-  useEffect(() => {
-    drawAnnotations();
-  }, [drawAnnotations]);
+  // Initial draw still relies on debounced effect above
 
   const canvasToImageCoords = (canvasX: number, canvasY: number) => {
     return {
@@ -329,6 +347,15 @@ export default function InteractiveCanvas({
       setSelectedAnnotation(hit.annotation);
       e.preventDefault();
     } else {
+      // Start panning when clicking empty area
+      setDragState({
+        active: true,
+        annotation: null,
+        annotationIndex: -1,
+        startX: x,
+        startY: y,
+        handle: 'pan'
+      });
       setSelectedAnnotation(null);
       setShowCategoryPicker(false);
     }
@@ -387,7 +414,14 @@ export default function InteractiveCanvas({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    if (dragState.active && dragState.annotation) {
+    if (dragState.active && dragState.handle === 'pan') {
+      // Pan in canvas coordinate space
+      const dx = x - dragState.startX;
+      const dy = y - dragState.startY;
+      setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      setDragState(prev => ({ ...prev, startX: x, startY: y }));
+      drawAnnotations();
+    } else if (dragState.active && dragState.annotation) {
       const dx = (x - dragState.startX) / scale;
       const dy = (y - dragState.startY) / scale;
       
@@ -436,7 +470,11 @@ export default function InteractiveCanvas({
     } else {
       // Update cursor
       const hit = findAnnotationAt(x, y);
-      canvas.style.cursor = hit ? getCursorForHandle(hit.handle) : 'default';
+      if (hit) {
+        canvas.style.cursor = getCursorForHandle(hit.handle);
+      } else {
+        canvas.style.cursor = 'grab';
+      }
     }
   };
 
@@ -461,27 +499,27 @@ export default function InteractiveCanvas({
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
+    // Center-based zoom (image center)
+    const canvasCenterX = (rect.right - rect.left) / 2;
+    const canvasCenterY = (rect.bottom - rect.top) / 2;
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.max(0.1, Math.min(5, scale * zoomFactor));
     
-    // Zoom towards mouse position
-    const imgX = (mouseX - offset.x) / scale;
-    const imgY = (mouseY - offset.y) / scale;
+    // Keep the image center fixed while zooming
+    const imgX = (canvasCenterX - offset.x) / scale;
+    const imgY = (canvasCenterY - offset.y) / scale;
     
     setScale(newScale);
     setOffset({
-      x: mouseX - imgX * newScale,
-      y: mouseY - imgY * newScale
+      x: canvasCenterX - imgX * newScale,
+      y: canvasCenterY - imgY * newScale
     });
   };
 
   if (!imageUrl) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400">
-        이미지를 선택하세요
+        Select an image
       </div>
     );
   }
@@ -508,7 +546,7 @@ export default function InteractiveCanvas({
           className="fixed bg-white border border-gray-300 rounded shadow-lg p-3 z-50"
           style={{ left: pickerPosition.x, top: pickerPosition.y }}
         >
-          <div className="text-sm font-semibold mb-2">카테고리 입력 (COCO 이름)</div>
+          <div className="text-sm font-semibold mb-2">Enter category (COCO name)</div>
           <input
             type="text"
             autoFocus
@@ -525,7 +563,7 @@ export default function InteractiveCanvas({
                   handleCategoryChange(categoryId);
                   setShowCategoryPicker(false);
                 } else {
-                  setCategoryErrorMsg(`"${categoryInputValue}"는 COCO 카테고리에 없습니다`);
+                  setCategoryErrorMsg(`"${categoryInputValue}" is not a COCO category`);
                 }
               } else if (e.key === 'Escape') {
                 setShowCategoryPicker(false);
@@ -535,7 +573,7 @@ export default function InteractiveCanvas({
               // Don't auto-submit on blur, just close
               setTimeout(() => setShowCategoryPicker(false), 150);
             }}
-            placeholder="예: person, car, dog"
+            placeholder="e.g. person, car, dog"
           />
           {categoryErrorMsg && (
             <div className="text-xs text-red-500 mt-1">
@@ -543,7 +581,7 @@ export default function InteractiveCanvas({
             </div>
           )}
           <div className="text-xs text-gray-500 mt-1">
-            COCO 데이터셋 카테고리 이름 입력 (예: person, car, dog)
+            Enter a COCO category name (e.g. person, car, dog)
           </div>
         </div>
       )}

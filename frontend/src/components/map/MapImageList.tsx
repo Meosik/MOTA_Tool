@@ -27,19 +27,19 @@ function calculateIoU(box1: [number, number, number, number], box2: [number, num
   return unionArea > 0 ? intersectionArea / unionArea : 0.0;
 }
 
-// Calculate simple AP for a single image
+
+// COCO-style AP (area under PR curve, 101-point interpolation)
 function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number): number {
   if (gtBoxes.length === 0) return predBoxes.length === 0 ? 1.0 : 0.0;
   if (predBoxes.length === 0) return 0.0;
-  
   const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
-  let tp = 0;
+  let tp = 0, fp = 0;
   const matched = new Set<number>();
-  
+  const precisions: number[] = [];
+  const recalls: number[] = [];
   for (const pred of sortedPreds) {
     let bestIou = 0;
     let bestGtIdx = -1;
-    
     gtBoxes.forEach((gt, idx) => {
       if (matched.has(idx)) return;
       const iou = calculateIoU(pred.bbox, gt.bbox);
@@ -48,67 +48,122 @@ function calculateImageAP(gtBoxes: any[], predBoxes: any[], iouThreshold: number
         bestGtIdx = idx;
       }
     });
-    
-    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
-      tp++;
-      matched.add(bestGtIdx);
-    }
-  }
-  
-  const precision = tp / sortedPreds.length;
-  const recall = tp / gtBoxes.length;
-  return (precision + recall) / 2;
-}
-
-// Calculate PR curve points for current image
-function calculatePRCurve(gtBoxes: any[], predBoxes: any[], iouThreshold: number): Array<{precision: number, recall: number, threshold: number}> {
-  if (gtBoxes.length === 0 || predBoxes.length === 0) {
-    return [{precision: 0, recall: 0, threshold: 0}];
-  }
-  
-  // Sort predictions by confidence descending
-  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
-  const points: Array<{precision: number, recall: number, threshold: number}> = [];
-  
-  // Start with point at recall=0, precision=1 (or first valid point)
-  points.push({precision: 1, recall: 0, threshold: 1});
-  
-  let tp = 0;
-  let fp = 0;
-  const matched = new Set<number>();
-  
-  // Calculate precision/recall at each prediction
-  sortedPreds.forEach((pred, idx) => {
-    let bestIou = 0;
-    let bestGtIdx = -1;
-    
-    gtBoxes.forEach((gt, gtIdx) => {
-      if (matched.has(gtIdx)) return;
-      const iou = calculateIoU(pred.bbox, gt.bbox);
-      if (iou > bestIou) {
-        bestIou = iou;
-        bestGtIdx = gtIdx;
-      }
-    });
-    
     if (bestIou >= iouThreshold && bestGtIdx >= 0) {
       tp++;
       matched.add(bestGtIdx);
     } else {
       fp++;
     }
-    
-    const precision = tp / (tp + fp);
-    const recall = tp / gtBoxes.length;
-    const threshold = pred.conf || 0;
-    
-    points.push({precision, recall, threshold});
-  });
-  
+    precisions.push(tp / (tp + fp));
+    recalls.push(tp / gtBoxes.length);
+  }
+  // 101-point interpolation (COCO)
+  let ap = 0;
+  for (let r = 0; r <= 100; r++) {
+    const recallThresh = r / 100;
+    // max precision for recall >= recallThresh
+    let p = 0;
+    for (let i = 0; i < recalls.length; i++) {
+      if (recalls[i] >= recallThresh) p = Math.max(p, precisions[i]);
+    }
+    ap += p;
+  }
+  return ap / 101;
+}
+
+// 이미지별 TP/FP/GT 계산
+function getImageStats(gtBoxes: any[], predBoxes: any[], iouThreshold: number) {
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+  let tp = 0, fp = 0;
+  const matched = new Set<number>();
+  for (const pred of sortedPreds) {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+    gtBoxes.forEach((gt, idx) => {
+      if (matched.has(idx)) return;
+      const iou = calculateIoU(pred.bbox, gt.bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = idx;
+      }
+    });
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    } else {
+      fp++;
+    }
+  }
+  return { tp, fp, gt: gtBoxes.length };
+}
+
+// Calculate PR curve points for current image
+function calculatePRCurve(gtBoxes: any[], predBoxes: any[], iouThreshold: number): Array<{precision: number, recall: number, threshold: number}> {
+  if (gtBoxes.length === 0 || predBoxes.length === 0) {
+    return [{ precision: 0, recall: 0, threshold: 0 }];
+  }
+
+  // Sort predictions by confidence descending
+  const sortedPreds = [...predBoxes].sort((a, b) => (b.conf || 0) - (a.conf || 0));
+
+  let tp = 0;
+  let fp = 0;
+  const matched = new Set<number>();
+
+  const precisions: number[] = [];
+  const recalls: number[] = [];
+
+  // Raw cumulative precision/recall per prediction
+  for (const pred of sortedPreds) {
+    let bestIou = 0;
+    let bestGtIdx = -1;
+
+    for (let gtIdx = 0; gtIdx < gtBoxes.length; gtIdx++) {
+      if (matched.has(gtIdx)) continue;
+      const iou = calculateIoU(pred.bbox, gtBoxes[gtIdx].bbox);
+      if (iou > bestIou) {
+        bestIou = iou;
+        bestGtIdx = gtIdx;
+      }
+    }
+
+    if (bestIou >= iouThreshold && bestGtIdx >= 0) {
+      tp++;
+      matched.add(bestGtIdx);
+    } else {
+      fp++;
+    }
+
+    precisions.push(tp / (tp + fp));
+    recalls.push(tp / gtBoxes.length);
+  }
+
+  // COCO-style precision envelope: make precision non-increasing w.r.t recall
+  const envPrecisions = [...precisions];
+  for (let i = envPrecisions.length - 2; i >= 0; i--) {
+    envPrecisions[i] = Math.max(envPrecisions[i], envPrecisions[i + 1]);
+  }
+
+  // Deduplicate points with the same recall and build curve points
+  const points: Array<{ precision: number; recall: number; threshold: number }> = [];
+  let lastRecall = -1;
+  for (let i = 0; i < recalls.length; i++) {
+    const r = recalls[i];
+    if (r === lastRecall) continue;
+    points.push({ precision: envPrecisions[i], recall: r, threshold: 0 });
+    lastRecall = r;
+  }
+
+  // Anchor start at recall=0 with current max precision
+  if (points.length > 0 && points[0].recall > 0) {
+    points.unshift({ precision: points[0].precision, recall: 0, threshold: 0 });
+  }
+
   return points;
 }
 
 // PR Curve visualization component
+// Moved primary PR curve rendering to MapControlPanel; this lightweight chart kept for dataset modal reuse
 function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], predBoxes: any[], iouThreshold: number}) {
   const points = React.useMemo(() => 
     calculatePRCurve(gtBoxes, predBoxes, iouThreshold),
@@ -129,55 +184,46 @@ function PRCurveChart({ gtBoxes, predBoxes, iouThreshold }: {gtBoxes: any[], pre
   }).join(' ');
   
   return (
-    <div className="p-2 border-t border-gray-200 bg-gray-50">
-      <div className="text-xs font-semibold text-gray-700 mb-1">PR Curve (Current Image)</div>
-      <svg width={width} height={height} className="bg-white rounded border border-gray-300">
-        {/* Grid lines */}
-        {[0, 0.25, 0.5, 0.75, 1].map(val => (
-          <g key={val}>
-            <line 
-              x1={padding} y1={padding + (1-val) * chartHeight} 
-              x2={padding + chartWidth} y2={padding + (1-val) * chartHeight}
-              stroke="#e5e7eb" strokeWidth="1"
-            />
-            <line 
-              x1={padding + val * chartWidth} y1={padding} 
-              x2={padding + val * chartWidth} y2={padding + chartHeight}
-              stroke="#e5e7eb" strokeWidth="1"
-            />
-          </g>
-        ))}
-        
-        {/* Axes */}
-        <line x1={padding} y1={padding} x2={padding} y2={padding + chartHeight} stroke="#374151" strokeWidth="2"/>
-        <line x1={padding} y1={padding + chartHeight} x2={padding + chartWidth} y2={padding + chartHeight} stroke="#374151" strokeWidth="2"/>
-        
-        {/* PR Curve */}
-        <path d={pathData} fill="none" stroke="#3b82f6" strokeWidth="2"/>
-        
-        {/* Axis labels */}
-        <text x={padding + chartWidth/2} y={height - 5} fontSize="10" textAnchor="middle" fill="#374151">Recall</text>
-        <text x="10" y={padding + chartHeight/2} fontSize="10" textAnchor="middle" fill="#374151" transform={`rotate(-90, 10, ${padding + chartHeight/2})`}>Precision</text>
-        
-        {/* Tick labels */}
-        {[0, 0.5, 1].map(val => (
-          <g key={val}>
-            <text x={padding + val * chartWidth} y={padding + chartHeight + 12} fontSize="8" textAnchor="middle" fill="#6b7280">{val.toFixed(1)}</text>
-            <text x={padding - 5} y={padding + (1-val) * chartHeight + 3} fontSize="8" textAnchor="end" fill="#6b7280">{val.toFixed(1)}</text>
-          </g>
-        ))}
-      </svg>
-    </div>
+    <svg width={width} height={height} className="bg-white rounded border border-gray-300">
+      {[0, 0.25, 0.5, 0.75, 1].map(val => (
+        <g key={val}>
+          <line
+            x1={padding} y1={padding + (1 - val) * chartHeight}
+            x2={padding + chartWidth} y2={padding + (1 - val) * chartHeight}
+            stroke="#e5e7eb" strokeWidth="1"
+          />
+          <line
+            x1={padding + val * chartWidth} y1={padding}
+            x2={padding + val * chartWidth} y2={padding + chartHeight}
+            stroke="#e5e7eb" strokeWidth="1"
+          />
+        </g>
+      ))}
+      <line x1={padding} y1={padding} x2={padding} y2={padding + chartHeight} stroke="#374151" strokeWidth="2" />
+      <line x1={padding} y1={padding + chartHeight} x2={padding + chartWidth} y2={padding + chartHeight} stroke="#374151" strokeWidth="2" />
+      <path d={pathData} fill="none" stroke="#3b82f6" strokeWidth="2" />
+      <text x={padding + chartWidth / 2} y={height - 5} fontSize="10" textAnchor="middle" fill="#374151">Recall</text>
+      <text x="10" y={padding + chartHeight / 2} fontSize="10" textAnchor="middle" fill="#374151" transform={`rotate(-90, 10, ${padding + chartHeight / 2})`}>Precision</text>
+      {[0, 0.5, 1].map(val => (
+        <g key={val}>
+          <text x={padding + val * chartWidth} y={padding + chartHeight + 12} fontSize="8" textAnchor="middle" fill="#6b7280">{val.toFixed(1)}</text>
+          <text x={padding - 5} y={padding + (1 - val) * chartHeight + 3} fontSize="8" textAnchor="end" fill="#6b7280">{val.toFixed(1)}</text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
-export default function MapImageList({ folderId, currentImageId, onImageSelect }: MapImageListProps) {
+import { useState } from 'react';
+
+export default function MapImageList({ folderId, currentImageId, onImageSelect, selectedPrCurveCat }: MapImageListProps & { selectedPrCurveCat?: number }) {
   // Get images and annotations from store
   const images = useMapStore(s => s.images);
   const gtAnnotations = useMapStore(s => s.gtAnnotations);
   const predAnnotations = useMapStore(s => s.predAnnotations);
   const getImageUrl = useMapStore(s => s.getImageUrl);
   const iou = useMapStore(s => s.iou);
+  const confThr = useMapStore(s => s.conf);
 
   // Virtual scrolling state
   const [scrollTop, setScrollTop] = React.useState(0);
@@ -191,7 +237,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   const BUFFER_SIZE = 5; // Number of items to render above and below visible area
   
   // Calculate visible range based on scroll position
-  const containerHeight = 340; // maxHeight from style
+  const containerHeight = 540; // expanded since PR curve moved out
   const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER_SIZE);
   const endIndex = Math.min(
     images.length,
@@ -213,7 +259,9 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
       if (cachedMapValues.has(image.id)) return;
       
       const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
-      const predForImage = predAnnotations.filter(a => a.image_id === image.id);
+      let predForImage = predAnnotations.filter(a => a.image_id === image.id);
+      // Confidence threshold 적용 (시각화용) - COCO 공식 AP는 모든 예측 사용
+      predForImage = predForImage.filter(p => (p.conf ?? 0) >= confThr);
       const imageMap = calculateImageAP(gtForImage, predForImage, defaultIoU);
       
       setCachedMapValues(prev => {
@@ -222,7 +270,12 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
         return next;
       });
     });
-  }, [visibleImages, images, gtAnnotations, predAnnotations, cachedMapValues]);
+  }, [visibleImages, images, gtAnnotations, predAnnotations, cachedMapValues, confThr]);
+
+  // Confidence threshold 변화 시 캐시 초기화
+  React.useEffect(() => {
+    setCachedMapValues(new Map());
+  }, [confThr]);
   
   // Handle scroll events
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -233,7 +286,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   if (!folderId) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        TopBar에서 이미지 폴더를 업로드하세요
+        Please upload an image folder in the TopBar
       </div>
     );
   }
@@ -241,7 +294,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   if (images.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm p-4">
-        이미지 로딩 중...
+        Loading images...
       </div>
     );
   }
@@ -250,12 +303,12 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
   return (
     <div className="h-full flex flex-col">
       <div className="px-3 py-2 text-xs text-gray-500 font-semibold">
-        <span>이미지 목록 ({images.length}개)</span>
+        <span>Image List ({images.length} items)</span>
       </div>
       <div 
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto" 
-        style={{maxHeight: '340px'}}
+        className="flex-1 overflow-y-auto"
+        style={{maxHeight: '540px'}}
         onScroll={handleScroll}
       >
         <div style={{ height: `${images.length * ITEM_HEIGHT}px`, position: 'relative' }}>
@@ -271,12 +324,11 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
             {visibleImages.map((image, relativeIdx) => {
               const idx = startIndex + relativeIdx;
               const thumbnailUrl = getImageUrl(idx);
-              const gtCount = gtAnnotations.filter(a => a.image_id === image.id).length;
-              const predCount = predAnnotations.filter(a => a.image_id === image.id).length;
-              
-              // Use cached mAP value (calculated on-demand)
+              const gtForImage = gtAnnotations.filter(a => a.image_id === image.id);
+              let predForImage = predAnnotations.filter(a => a.image_id === image.id);
+              predForImage = predForImage.filter(p => (p.conf ?? 0) >= confThr);
               const imageMap = cachedMapValues.get(image.id) || 0;
-              
+              const stats = getImageStats(gtForImage, predForImage, iou);
               return (
                 <button
                   key={image.id}
@@ -301,7 +353,6 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
                         IMG
                       </div>
                     )}
-                    
                     {/* Metadata */}
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate" title={image.name}>
@@ -309,8 +360,9 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
                       </div>
                       <div className="flex gap-2 text-xs mt-0.5">
                         <span className="text-gray-600">mAP: {(imageMap * 100).toFixed(1)}%</span>
-                        <span className="text-green-600">GT: {gtCount}</span>
-                        <span className="text-orange-600">Pred: {predCount}</span>
+                        <span className="text-green-600">GT: {stats.gt}</span>
+                        <span className="text-blue-600">TP: {stats.tp}</span>
+                        <span className="text-red-600">FP: {stats.fp}</span>
                       </div>
                     </div>
                   </div>
@@ -321,12 +373,7 @@ export default function MapImageList({ folderId, currentImageId, onImageSelect }
         </div>
       </div>
       
-      {/* PR Curve for current image */}
-      {currentImageId !== null && (() => {
-        const gtForCurrent = gtAnnotations.filter(a => a.image_id === currentImageId);
-        const predForCurrent = predAnnotations.filter(a => a.image_id === currentImageId);
-        return <PRCurveChart gtBoxes={gtForCurrent} predBoxes={predForCurrent} iouThreshold={iou} />;
-      })()}
+      {/* PR curve moved to MapControlPanel bottom */}
     </div>
   );
 }

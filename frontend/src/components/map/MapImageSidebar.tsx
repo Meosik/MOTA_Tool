@@ -11,6 +11,7 @@ interface SidebarProps {
   folderId?: string | null;
   currentImageId?: number | null;
   onImageSelect?: (imageId: number) => void;
+  selectedPrCurveCat?: number | null;
 }
 
 export default function MapImageSidebar({ 
@@ -21,7 +22,8 @@ export default function MapImageSidebar({
   onUploadSuccess,
   folderId,
   currentImageId,
-  onImageSelect
+  onImageSelect,
+  selectedPrCurveCat
 }: SidebarProps) {
   return (
     <aside className="p-2 w-64 border-r flex flex-col gap-3 bg-gray-50 h-full min-h-0">
@@ -29,7 +31,7 @@ export default function MapImageSidebar({
         <div className="font-bold">Images</div>
         {!folderId && (
           <div className="text-xs text-gray-500 py-2">
-            TopBar에서 이미지 폴더를 업로드하세요
+            Please upload an image folder in the TopBar
           </div>
         )}
       </div>
@@ -41,6 +43,7 @@ export default function MapImageSidebar({
             folderId={folderId}
             currentImageId={currentImageId || null}
             onImageSelect={onImageSelect}
+            selectedPrCurveCat={selectedPrCurveCat}
           />
         </div>
       ) : (
