@@ -1,22 +1,19 @@
-<div align="center">
 
 # Tracker Evaluation Toolkit
 
 Local, privacy-preserving evaluation for object detection (mAP) and multi-object tracking (MOTA). No cloud uploads; everything runs on your machine.
 
-
-
 ## Quick Start
 
 **Production server (Docker, Nginx + FastAPI) – Recommended for deployment**
 
-1. 저장소 클론
+1. Clone the repository
    ```bash
    git clone https://github.com/Meosik/MOTA_Tool.git
    cd MOTA_Tool
    ```
 
-2. 환경변수 파일 준비 (예시 파일을 복사해 실제 환경에 맞게 수정)
+2. Copy environment variable files
    ```bash
    # Windows
    copy infra\env\backend.local.env backend\.env
@@ -26,23 +23,23 @@ Local, privacy-preserving evaluation for object detection (mAP) and multi-object
    cp infra/env/backend.local.env backend/.env
    cp infra/env/frontend.local.env frontend/.env
    ```
-   - backend/.env, frontend/.env 파일을 실제 배포 환경에 맞게 수정하세요.
+   Edit `backend/.env` and `frontend/.env` as needed for your deployment environment.
 
-3. 백엔드/프론트엔드 이미지 빌드
+3. Build backend and frontend images
    ```bash
    docker build -f backend/Dockerfile -t my-backend ./backend
    docker build -f frontend/Dockerfile.prod -t my-frontend-prod ./frontend
    ```
 
-4. 컨테이너 실행
+4. Run containers
    ```bash
    docker run -d -p 8000:8000 --env-file backend/.env my-backend
    docker run -d -p 8088:80 my-frontend-prod
    ```
 
-5. 접속
-   - 프론트엔드: http://localhost:8088/
-   - 백엔드(OpenAPI): http://localhost:8000/docs
+5. Access the app
+   - Frontend: http://localhost:8088/
+   - Backend (OpenAPI): http://localhost:8000/docs
 
 ---
 
