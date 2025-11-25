@@ -4,6 +4,56 @@
 
 Local, privacy-preserving evaluation for object detection (mAP) and multi-object tracking (MOTA). No cloud uploads; everything runs on your machine.
 
+
+## Quick Start
+
+### A. Development/Test Environment (Local Build)
+
+1. Clone the repository
+  ```bash
+  git clone https://github.com/Meosik/MOTA_Tool.git
+  cd MOTA_Tool
+  ```
+
+2. Prepare environment variable files  
+  (Copy example files and edit values as needed)
+  ```bash
+  # Windows
+  copy infra\env\backend.local.env backend\.env
+  copy infra\env\frontend.local.env frontend\.env
+
+  # Linux/Mac
+  cp infra/env/backend.local.env backend/.env
+  cp infra/env/frontend.local.env frontend/.env
+  ```
+
+3. Build and run all services with Docker Compose
+  ```bash
+  docker compose -f infra/docker-compose.yml up --build
+  ```
+  - Frontend: http://localhost:5173
+  - Backend (OpenAPI): http://127.0.0.1:8000/docs
+
+4. Stop services
+  ```bash
+  docker compose -f infra/docker-compose.yml down
+  ```
+
+- **Data/results are stored in the `appdata/` folder** (persisted across container restarts/rebuilds)
+- **If no .env file is present, defaults are used** (but you may need to set CORS and other options explicitly)
+
+### B. Production/Deployment (Prebuilt Images)
+
+- Use prebuilt image bundles (tar) or pull from GHCR/container registry
+- See below for details: “Portable Bundle” or “Container Registry Publishing”
+
+---
+
+**Additional Notes**
+- If using a tar bundle tracked by Git LFS, always run `git lfs install` and `git lfs pull` before use
+- Edit environment variable files for your actual deployment environment
+- Both Windows and Linux/Mac commands are shown for clarity
+
 </div>
 
 ## Table of Contents
@@ -190,8 +240,8 @@ Three common ways to use/distribute this toolkit:
 ### 1. Quick Start (Docker Compose)
 Use the existing repository layout directly.
 ```bash
-git clone https://github.com/<YOUR_ORG>/<YOUR_REPO>.git
-cd <YOUR_REPO>
+git clone https://github.com/Meosik/MOTA_Tool.git
+cd MOTA_Tool
 cp infra/env/backend.local.env backend/.env
 cp infra/env/frontend.local.env frontend/.env
 docker compose -f infra/docker-compose.yml up --build
@@ -210,12 +260,12 @@ When you want to hand over runnable images without requiring a fresh build:
 1. Build locally (or via CI) to produce `infra-backend:latest` & `infra-frontend:latest`.
 2. Export bundle:
 ```bash
-docker save -o mota_tool_bundle.tar infra-backend:latest infra-frontend:latest
+docker save -o mota_tool_bundle_20251125.tar infra-backend:latest infra-frontend:latest
 ```
-3. Distribute: send `mota_tool_bundle.tar` + `deploy/docker-compose.yml` + `deploy/*.env.example`.
+3. Distribute: send `mota_tool_bundle_20251125.tar` + `deploy/docker-compose.yml` + `deploy/*.env.example`.
 4. On target machine:
 ```bash
-docker load -i mota_tool_bundle.tar
+docker load -i mota_tool_bundle_20251125.tar
 cd deploy
 copy backend.env.example backend.env
 copy frontend.env.example frontend.env
@@ -228,8 +278,8 @@ To regenerate the bundle after edits, repeat build + save steps. This mode avoid
 #### Using a Git LFS-Tracked Bundle
 If the tar bundle (e.g. `mota_tool_bundle_20251125.tar`) is committed via Git LFS instead of distributed manually:
 ```bash
-git clone https://github.com/<YOUR_ORG>/<YOUR_REPO>.git
-cd <YOUR_REPO>
+git clone https://github.com/Meosik/MOTA_Tool.git
+cd MOTA_Tool
 git lfs install       # one-time
 git lfs pull          # fetch large LFS objects (tar file)
 docker load -i mota_tool_bundle_20251125.tar
