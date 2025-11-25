@@ -5,22 +5,18 @@
 Local, privacy-preserving evaluation for object detection (mAP) and multi-object tracking (MOTA). No cloud uploads; everything runs on your machine.
 
 
+
 ## Quick Start
 
+**Production server (Docker, Nginx + FastAPI) – Recommended for deployment**
 
-### A. Development/Test Environment (Local Build)
-
-#### 1. Dev server (hot reload, for development)
-
-
-1. Clone the repository
+1. 저장소 클론
    ```bash
    git clone https://github.com/Meosik/MOTA_Tool.git
    cd MOTA_Tool
    ```
 
-2. Prepare environment variable files  
-   (Copy example files and edit values as needed)
+2. 환경변수 파일 준비 (예시 파일을 복사해 실제 환경에 맞게 수정)
    ```bash
    # Windows
    copy infra\env\backend.local.env backend\.env
@@ -30,41 +26,25 @@ Local, privacy-preserving evaluation for object detection (mAP) and multi-object
    cp infra/env/backend.local.env backend/.env
    cp infra/env/frontend.local.env frontend/.env
    ```
+   - backend/.env, frontend/.env 파일을 실제 배포 환경에 맞게 수정하세요.
 
-3. Build and run all services with Docker Compose
+3. 백엔드/프론트엔드 이미지 빌드
    ```bash
-   docker compose -f infra/docker-compose.yml up --build
-   ```
-   - Frontend: http://localhost:5173
-   - Backend (OpenAPI): http://127.0.0.1:8000/docs
-
-4. Stop services
-   ```bash
-   docker compose -f infra/docker-compose.yml down
+   docker build -f backend/Dockerfile -t my-backend ./backend
+   docker build -f frontend/Dockerfile.prod -t my-frontend-prod ./frontend
    ```
 
-- **Data/results are stored in the `appdata/` folder** (persisted across container restarts/rebuilds)
-- **If no .env file is present, defaults are used** (but you may need to set CORS and other options explicitly)
+4. 컨테이너 실행
+   ```bash
+   docker run -d -p 8000:8000 --env-file backend/.env my-backend
+   docker run -d -p 8088:80 my-frontend-prod
+   ```
 
-#### 2. Production server (static build, for deployment)
+5. 접속
+   - 프론트엔드: http://localhost:8088/
+   - 백엔드(OpenAPI): http://localhost:8000/docs
 
-Build and run both backend (API) and frontend (nginx) containers:
-
-```bash
-# 1. Build backend (FastAPI)
-docker build -f backend/Dockerfile -t my-backend ./backend
-# 2. Build frontend (nginx static)
-docker build -f frontend/Dockerfile.prod -t my-frontend-prod ./frontend
-
-# 3. Run backend (API)
-docker run -d -p 8000:8000 --env-file backend/.env my-backend
-# 4. Run frontend (nginx)
-docker run -d -p 80:80 my-frontend-prod
-
-# Access:
-# - Frontend: http://localhost/
-# - Backend (OpenAPI): http://localhost:8000/docs
-```
+---
 
 
 ### B. Production/Deployment (Prebuilt Images)
