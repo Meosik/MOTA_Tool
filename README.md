@@ -7,40 +7,65 @@ Local, privacy-preserving evaluation for object detection (mAP) and multi-object
 
 ## Quick Start
 
+
 ### A. Development/Test Environment (Local Build)
 
+#### 1. Dev server (hot reload, for development)
+
+
 1. Clone the repository
-  ```bash
-  git clone https://github.com/Meosik/MOTA_Tool.git
-  cd MOTA_Tool
-  ```
+   ```bash
+   git clone https://github.com/Meosik/MOTA_Tool.git
+   cd MOTA_Tool
+   ```
 
 2. Prepare environment variable files  
-  (Copy example files and edit values as needed)
-  ```bash
-  # Windows
-  copy infra\env\backend.local.env backend\.env
-  copy infra\env\frontend.local.env frontend\.env
+   (Copy example files and edit values as needed)
+   ```bash
+   # Windows
+   copy infra\env\backend.local.env backend\.env
+   copy infra\env\frontend.local.env frontend\.env
 
-  # Linux/Mac
-  cp infra/env/backend.local.env backend/.env
-  cp infra/env/frontend.local.env frontend/.env
-  ```
+   # Linux/Mac
+   cp infra/env/backend.local.env backend/.env
+   cp infra/env/frontend.local.env frontend/.env
+   ```
 
 3. Build and run all services with Docker Compose
-  ```bash
-  docker compose -f infra/docker-compose.yml up --build
-  ```
-  - Frontend: http://localhost:5173
-  - Backend (OpenAPI): http://127.0.0.1:8000/docs
+   ```bash
+   docker compose -f infra/docker-compose.yml up --build
+   ```
+   - Frontend: http://localhost:5173
+   - Backend (OpenAPI): http://127.0.0.1:8000/docs
 
 4. Stop services
-  ```bash
-  docker compose -f infra/docker-compose.yml down
-  ```
+   ```bash
+   docker compose -f infra/docker-compose.yml down
+   ```
 
 - **Data/results are stored in the `appdata/` folder** (persisted across container restarts/rebuilds)
 - **If no .env file is present, defaults are used** (but you may need to set CORS and other options explicitly)
+
+#### 2. Production server (static build, for deployment)
+
+Build and run both backend (API) and frontend (nginx) containers:
+
+```bash
+# 1. Build backend (FastAPI)
+docker build -f backend/Dockerfile -t my-backend ./backend
+# 2. Build frontend (nginx static)
+docker build -f frontend/Dockerfile.prod -t my-frontend-prod ./frontend
+
+# 3. Run backend (API)
+docker run -d -p 8000:8000 --env-file backend/.env my-backend
+# 4. Run frontend (nginx)
+docker run -d -p 80:80 my-frontend-prod
+
+# Access:
+# - Frontend: http://localhost/
+# - Backend (OpenAPI): http://localhost:8000/docs
+```
+
 
 ### B. Production/Deployment (Prebuilt Images)
 
