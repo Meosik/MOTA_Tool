@@ -93,7 +93,7 @@ export default function DatasetMetricsModal({ open, onClose, overallLoading, ove
     return (
       <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40">
         <div className="w-[460px] bg-white rounded shadow-lg p-6 space-y-4">
-          <div className="text-lg font-semibold">Overall mAP Calculation</div>
+          <div className="text-lg font-semibold">Overall mAP Calculation (IoU {snapshotIou.toFixed(2)}, Conf {snapshotConf.toFixed(2)})</div>
           <div className="text-sm text-gray-700">{overallLoading? 'Collecting mAP from backend...' : 'Calculating per-class statistics...'}</div>
           <div className="h-3 w-full rounded bg-gray-200 overflow-hidden">
             <div className="h-full bg-brand-600" style={{ width: overallLoading? '40%' : pct+'%' }} />
@@ -118,7 +118,7 @@ export default function DatasetMetricsModal({ open, onClose, overallLoading, ove
         {/* Left: table */}
         <div className="flex-1 overflow-auto">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-lg font-semibold">Dataset Class Statistics</div>
+            <div className="text-lg font-semibold">Dataset Class Statistics (IoU {iouThr.toFixed(2)}, Conf {confThr.toFixed(2)})</div>
             <div className="text-sm text-gray-600">Overall mAP: {overallMap!=null ? (overallMap*100).toFixed(2)+'%' : '—'}</div>
           </div>
           <table className="min-w-full text-xs border-collapse">

@@ -82,7 +82,7 @@ export default function RightPanel() {
 
       {/* IoU */}
       <div className="space-y-2">
-        <div className="text-sm font-semibold">IoU Threshold</div>
+        <div className="text-sm font-semibold">IoU threshold ({iouSafe.toFixed(2)})</div>
         <div className="flex items-center gap-2">
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={()=>adjustIou(-stepLarge)} title="IoU -0.05">
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="9,6 17,1 17,11"/><polygon points="1,6 9,1 9,11"/></svg>
@@ -103,12 +103,12 @@ export default function RightPanel() {
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">IoU = {iouSafe.toFixed(2)}</div>
+        {/* value inline in title; no separate line */}
       </div>
 
       {/* Confidence */}
       <div className="space-y-2">
-        <div className="text-sm font-semibold">Confidence Threshold</div>
+        <div className="text-sm font-semibold">Confidence threshold ({confSafe.toFixed(2)})</div>
         <div className="flex items-center gap-2">
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={()=>adjustConf(-stepLarge)} title="conf -0.05">
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="9,6 17,1 17,11"/><polygon points="1,6 9,1 9,11"/></svg>
@@ -129,7 +129,7 @@ export default function RightPanel() {
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="3,1 11,6 3,11"/><polygon points="11,1 19,6 11,11"/></svg>
           </button>
         </div>
-        <div className="text-xs text-neutral-600 font-mono">conf ≥ {confSafe.toFixed(2)}</div>
+        {/* value inline in title; no separate line */}
       </div>
 
       {/* MOTA (Backend via WebSocket with overrides) */}
