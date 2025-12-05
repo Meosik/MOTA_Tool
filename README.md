@@ -9,8 +9,8 @@ Local, privacy-preserving evaluation for object detection (mAP) and multi-object
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/Meosik/MOTA_Tool.git
-   cd MOTA_Tool
+   git clone https://github.com/Meosik/MachineVision-VisualizationTool-fromKHU.git
+   cd MachineVision-VisualizationTool-fromKHU
    ```
 
 2. Copy environment variable files
@@ -242,8 +242,8 @@ Three common ways to use/distribute this toolkit:
 ### 1. Quick Start (Docker Compose)
 Use the existing repository layout directly.
 ```bash
-git clone https://github.com/Meosik/MOTA_Tool.git
-cd MOTA_Tool
+git clone https://github.com/Meosik/MachineVision-VisualizationTool-fromKHU.git
+cd MachineVision-VisualizationTool-fromKHU
 cp infra/env/backend.local.env backend/.env
 cp infra/env/frontend.local.env frontend/.env
 docker compose -f infra/docker-compose.yml up --build
@@ -280,8 +280,8 @@ To regenerate the bundle after edits, repeat build + save steps. This mode avoid
 #### Using a Git LFS-Tracked Bundle
 If the tar bundle (e.g. `mota_tool_bundle_20251125.tar`) is committed via Git LFS instead of distributed manually:
 ```bash
-git clone https://github.com/Meosik/MOTA_Tool.git
-cd MOTA_Tool
+git clone https://github.com/Meosik/MachineVision-VisualizationTool-fromKHU.git
+cd MachineVision-VisualizationTool-fromKHU
 git lfs install       # one-time
 git lfs pull          # fetch large LFS objects (tar file)
 docker load -i mota_tool_bundle_20251125.tar
