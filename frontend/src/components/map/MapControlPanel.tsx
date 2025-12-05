@@ -260,7 +260,7 @@ function InstancePanel(props: {
           {imageMap != null && (
             <tr className="border-t bg-neutral-50">
               <td />
-              <td className="px-2 py-1 text-left font-semibold">Current Image mAP</td>
+              <td className="px-2 py-1 text-left font-semibold">Image mAP</td>
               <td className="px-2 py-1 text-center" colSpan={3}></td>
               <td className="px-2 py-1 text-center font-mono text-purple-700">{(imageMap * 100).toFixed(2)}%</td>
               <td />
@@ -381,7 +381,7 @@ export default function MapControlPanel({
     <aside className="w-80 shrink-0 border-l border-neutral-200 p-3 flex flex-col gap-4">
       {/* IoU Threshold */}
       <div className="space-y-2">
-        <div className="text-sm font-semibold">IoU Threshold</div>
+        <div className="text-sm font-semibold">IoU threshold ({deferredIou.toFixed(2)})</div>
         <div className="flex items-center gap-2">
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustIou(-stepLarge)} title="IoU -0.05">
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="9,6 17,1 17,11"/><polygon points="1,6 9,1 9,11"/></svg>
@@ -410,7 +410,7 @@ export default function MapControlPanel({
 
       {/* Confidence Threshold */}
       <div className="space-y-2">
-        <div className="text-sm font-semibold">Confidence Threshold</div>
+        <div className="text-sm font-semibold">Confidence threshold ({deferredConf.toFixed(2)})</div>
         <div className="flex items-center gap-2">
           <button className="px-2 py-1 rounded bg-neutral-100 hover:bg-neutral-200" onClick={() => adjustConf(-stepLarge)} title="conf -0.05">
             <svg viewBox="0 0 20 12" width="16" height="12"><polygon points="9,6 17,1 17,11"/><polygon points="1,6 9,1 9,11"/></svg>

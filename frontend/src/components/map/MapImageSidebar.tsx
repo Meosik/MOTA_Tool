@@ -48,7 +48,6 @@ export default function MapImageSidebar({
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <div className="text-sm text-gray-500 mb-2">Annotations</div>
           <ul>
             {annotationIdList.map(id => (
               <li key={id}>
